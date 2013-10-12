@@ -25,3 +25,11 @@ char* GetString(void)
 {
 	return "Dont buy shit we dont need";
 }
+
+void GetArrayData(int size, int data[])
+{
+	int i;
+	for(i = 0; i < size; i++) {
+		data[i] = i + 1;
+	}
+}
