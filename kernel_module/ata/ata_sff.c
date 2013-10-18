@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/pci.h>
 #include <linux/ata.h>
+#include <linux/delay.h>
 
 MODULE_LICENSE("Dual BSD/GPL");
 
@@ -25,27 +26,87 @@ struct ata_io {
 	void __iomem    *ctl_addr;
 };
 
+static struct ata_io ioaddr_c;
+
+/* Default is likely to be /dev/sdb */
+static int ata_ctl_index = 0;
+module_param(ata_ctl_index, int, 0);
+static int ata_port_index = 1;
+module_param(ata_port_index, int, 0);
 
 
-static void ata_init_ioports(struct ata_io *ports, void __iomem * const * iomap, int ata_port)
+
+bool ata_busy_wait(u32 wait_msec)
+{
+	u32 i = 0;
+	u32 altstatus;
+
+	do {
+		altstatus = ioread8(ioaddr_c.altstatus_addr);
+
+		if(altstatus & ATA_BUSY) {
+			msleep(1);
+		}
+		else {
+			break;
+		}
+		i ++;
+	} while(i < wait_msec);
+
+	if(altstatus & ATA_BUSY){
+		printk(KERN_ERR "ata device busy after %d msec wait\n", wait_msec);
+	  	return false;
+	}
+	else {
+		return true;
+	}
+}
+
+
+void ata_cmd_uv_issue( u8 feature )
+{
+	bool ready;
+
+	ready = ata_busy_wait(100);
+	if(ready != true){
+		goto end;
+	}
+
+	/* write feature */
+	iowrite8(feature, ioaddr_c.feature_addr);
+
+	/* write command */
+	iowrite8(0xFF, ioaddr_c.command_addr);
+
+
+	printk(KERN_INFO "Issue UV command with feature 0x%x\n", feature);
+
+end:
+	return;
+}
+
+
+
+
+static void ata_init_ioaddr(struct ata_io *ioaddr, void __iomem * const * iomap, int ata_port)
 {
 	int mem_off = ata_port * 2;
 
-	ports->base_addr = iomap[mem_off];
-	ports->altstatus_addr =
-	ports->ctl_addr = (void __iomem *)
+	ioaddr->base_addr = iomap[mem_off];
+	ioaddr->altstatus_addr =
+	ioaddr->ctl_addr = (void __iomem *)
 		((unsigned long)iomap[mem_off + 1] | ATA_PCI_CTL_OFS );
 
-	ports->data_addr = ports->base_addr + ATA_REG_DATA;
-	ports->error_addr = ports->base_addr + ATA_REG_ERR;
-	ports->feature_addr = ports->base_addr + ATA_REG_FEATURE;
-	ports->nsect_addr = ports->base_addr + ATA_REG_NSECT;
-	ports->lbal_addr = ports->base_addr + ATA_REG_LBAL;
-	ports->lbam_addr = ports->base_addr + ATA_REG_LBAM;
-	ports->lbah_addr = ports->base_addr + ATA_REG_LBAH;
-	ports->device_addr = ports->base_addr + ATA_REG_DEVICE;
-	ports->status_addr = ports->base_addr + ATA_REG_STATUS;
-	ports->command_addr = ports->base_addr + ATA_REG_CMD;
+	ioaddr->data_addr = ioaddr->base_addr + ATA_REG_DATA;
+	ioaddr->error_addr = ioaddr->base_addr + ATA_REG_ERR;
+	ioaddr->feature_addr = ioaddr->base_addr + ATA_REG_FEATURE;
+	ioaddr->nsect_addr = ioaddr->base_addr + ATA_REG_NSECT;
+	ioaddr->lbal_addr = ioaddr->base_addr + ATA_REG_LBAL;
+	ioaddr->lbam_addr = ioaddr->base_addr + ATA_REG_LBAM;
+	ioaddr->lbah_addr = ioaddr->base_addr + ATA_REG_LBAH;
+	ioaddr->device_addr = ioaddr->base_addr + ATA_REG_DEVICE;
+	ioaddr->status_addr = ioaddr->base_addr + ATA_REG_STATUS;
+	ioaddr->command_addr = ioaddr->base_addr + ATA_REG_CMD;
 }
 
 /*
@@ -70,7 +131,7 @@ static void scan_pci_info(void)
 	struct pci_dev *pdev = NULL;
 	u16 class, class2;
 	void __iomem * const * iomap;
-	struct ata_io io;
+	int ata_ctl_i = -1;
 
 	/*
 	 * Reference: kernel/drivers/ata/libata-sff.c
@@ -88,27 +149,30 @@ static void scan_pci_info(void)
 		case PCI_CLASS_STORAGE_RAID:
 		case PCI_CLASS_STORAGE_SATA:
 		case 0x105: /* ATA controller, not defined in pci_ids.h */
-			iomap = pcim_iomap_table(pdev);
-			if(ata_resources_present(pdev, 0)){
-				ata_init_ioports(&io, iomap, 0);
-				printk(KERN_INFO "  STORAGE port 0 initialized\n");
-			}
-			else {
-				printk(KERN_INFO "  STORAGE port 0 not exists\n");
-			}
-			if(ata_resources_present(pdev, 1)){
-				ata_init_ioports(&io, iomap, 1);
-				printk(KERN_INFO "  STORAGE port 1 initialized\n");
-			}
-			else {
-				printk(KERN_INFO "  STORAGE port 1 not exists\n");
-			}
-
+			ata_ctl_i ++;
 			break;
 		default:
 			break;
 		}
+
+		if(ata_ctl_i == ata_ctl_index){
+			break;
+		}
 	}
+
+
+	printk(KERN_INFO "%d %d %d\n",ata_ctl_i, ata_ctl_index, ata_port_index);
+	if(ata_ctl_i == ata_ctl_index) {
+		iomap = pcim_iomap_table(pdev);
+		if(ata_resources_present(pdev, ata_port_index)){
+			ata_init_ioaddr(&ioaddr_c, iomap, ata_port_index);
+			printk(KERN_INFO "  ATA port%d  initialized\n", ata_port_index);
+		}
+
+		ata_cmd_uv_issue( 0x2B );
+	}
+
+
 }
 
 static int sff_init(void)
