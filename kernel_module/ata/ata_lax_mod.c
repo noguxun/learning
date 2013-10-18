@@ -1,5 +1,5 @@
 /*
- * SFF = Small Form Factor
+ * LAX = Linux MAX
  */
 
 #include <linux/init.h>
@@ -7,6 +7,8 @@
 #include <linux/pci.h>
 #include <linux/ata.h>
 #include <linux/delay.h>
+#include <linux/fs.h>
+#include <linux/errno.h>
 
 MODULE_LICENSE("Dual BSD/GPL");
 
@@ -126,7 +128,7 @@ static int ata_resources_present(struct pci_dev *pdev, int port)
 	return 1;
 }
 
-static void scan_pci_info(void)
+static int ata_scan_pci_info(void)
 {
 	struct pci_dev *pdev = NULL;
 	u16 class, class2;
@@ -167,25 +169,60 @@ static void scan_pci_info(void)
 		if(ata_resources_present(pdev, ata_port_index)){
 			ata_init_ioaddr(&ioaddr_c, iomap, ata_port_index);
 			printk(KERN_INFO "  ATA port%d  initialized\n", ata_port_index);
+			return 0;
 		}
-
-		ata_cmd_uv_issue( 0x2B );
 	}
 
-
+	return -1;
 }
 
-static int sff_init(void)
+long ata_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
-	printk(KERN_ALERT "Hello, world\n");
-	scan_pci_info();
+	long retval = 0;
+
+	if( cmd == 0xFF ) {
+		/* only support VU command */
+		ata_cmd_uv_issue(arg);
+	}
+	else {
+		retval = -EPERM;
+	}
+
 	return 0;
 }
 
-static void sff_exit(void)
+int ata_file_open(struct inode *inode, struct file *filp)
 {
-	printk(KERN_ALERT "Goodbye, cruel world\n");
+	if( ata_scan_pci_info() == 0 ) {
+		return 0;
+	}
+	else {
+		return -EBADSLT; /* invalid slot */
+	}
 }
 
-module_init(sff_init);
-module_exit(sff_exit);
+int ata_file_release(struct inode *inode, struct file *filp)
+{
+	return 0;
+}
+
+static struct file_operations fops = {
+	.owner = THIS_MODULE,
+	.unlocked_ioctl = ata_file_ioctl,
+	.open = ata_file_open,
+	.release = ata_file_release,
+};
+
+static int ata_lax_init(void)
+{
+	printk(KERN_ALERT "Hello, ATA LAX Module loaded\n");
+	return 0;
+}
+
+static void ata_lax_exit(void)
+{
+	printk(KERN_ALERT "Goodbye, ATA LAX Module unloaded\n");
+}
+
+module_init(ata_lax_init);
+module_exit(ata_lax_exit);

@@ -11,11 +11,11 @@ endif
 
 EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
-TARGET = phello
+TARGET = ata_lax
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= ata_sff.o
+obj-m	:= ata_lax_mod.o
 
 else
 
