@@ -15,7 +15,7 @@ TARGET = ata_lax
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= ata_lax_mod.o
+obj-m	:= ata_lax.o
 
 else
 
@@ -33,7 +33,7 @@ install:
 	install -c $(TARGET).o $(INSTALLDIR)
 
 clean:
-	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c modules.order Module.symvers
+	rm -rf .tmp_ver* *.o *~ core .depend .*.cmd *.ko *.mod.c modules.order Module.symvers
 
 
 depend .depend dep:
