@@ -10,6 +10,32 @@
 #include <linux/fs.h>
 #include <linux/errno.h>
 #include <linux/cdev.h>
+#include <asm/uaccess.h>
+
+#include "ata_lax.h"
+
+
+/*
+ * compile-time options: to be removed as soon as all the drivers are
+ * converted to the new debugging mechanism
+ */
+#undef ATA_DEBUG		/* debugging output */
+#undef ATA_VERBOSE_DEBUG	/* yet more debugging output */
+
+
+/* note: prints function name for you */
+#ifdef ATA_DEBUG
+#define DPRINTK(fmt, args...) printk(KERN_ERR "%s: " fmt, __func__, ## args)
+#ifdef ATA_VERBOSE_DEBUG
+#define VPRINTK(fmt, args...) printk(KERN_ERR "%s: " fmt, __func__, ## args)
+#else
+#define VPRINTK(fmt, args...)
+#endif	/* ATA_VERBOSE_DEBUG */
+#else
+#define DPRINTK(fmt, args...)
+#define VPRINTK(fmt, args...)
+#endif	/* ATA_DEBUG */
+
 
 MODULE_LICENSE("Dual BSD/GPL");
 
@@ -31,6 +57,7 @@ struct ata_io {
 
 struct ata_lax_dev {
 	struct cdev cdev;
+	u8  last_ctl;
 };
 
 static struct ata_io mod_ioaddr;
@@ -49,6 +76,60 @@ module_param(ata_ctl_index, int, 0);
 module_param(ata_port_index, int, 0);
 module_param(ata_lax_major, int, 0);
 module_param(ata_lax_minor, int, 0);
+
+
+bool ata_busy_wait(u32 wait_msec);
+
+
+void ata_tf_write(const struct ata_taskfile *tf)
+{
+	struct ata_io *ioaddr = &mod_ioaddr;
+	struct ata_lax_dev *ap = &mod_dev;
+	unsigned int is_addr = tf->flags & ATA_TFLAG_ISADDR;
+
+	if (tf->ctl != ap->last_ctl) {
+		if (ioaddr->ctl_addr)
+			iowrite8(tf->ctl, ioaddr->ctl_addr);
+		ap->last_ctl = tf->ctl;
+		ata_busy_wait(100);
+	}
+
+	if (is_addr && (tf->flags & ATA_TFLAG_LBA48)) {
+		WARN_ON_ONCE(!ioaddr->ctl_addr);
+		iowrite8(tf->hob_feature, ioaddr->feature_addr);
+		iowrite8(tf->hob_nsect, ioaddr->nsect_addr);
+		iowrite8(tf->hob_lbal, ioaddr->lbal_addr);
+		iowrite8(tf->hob_lbam, ioaddr->lbam_addr);
+		iowrite8(tf->hob_lbah, ioaddr->lbah_addr);
+		VPRINTK("hob: feat 0x%X nsect 0x%X, lba 0x%X 0x%X 0x%X\n",
+			tf->hob_feature,
+			tf->hob_nsect,
+			tf->hob_lbal,
+			tf->hob_lbam,
+			tf->hob_lbah);
+	}
+
+	if (is_addr) {
+		iowrite8(tf->feature, ioaddr->feature_addr);
+		iowrite8(tf->nsect, ioaddr->nsect_addr);
+		iowrite8(tf->lbal, ioaddr->lbal_addr);
+		iowrite8(tf->lbam, ioaddr->lbam_addr);
+		iowrite8(tf->lbah, ioaddr->lbah_addr);
+		VPRINTK("feat 0x%X nsect 0x%X lba 0x%X 0x%X 0x%X\n",
+			tf->feature,
+			tf->nsect,
+			tf->lbal,
+			tf->lbam,
+			tf->lbah);
+	}
+
+	if (tf->flags & ATA_TFLAG_DEVICE) {
+		iowrite8(tf->device, ioaddr->device_addr);
+		VPRINTK("device 0x%X\n", tf->device);
+	}
+
+	ata_busy_wait(100);
+}
 
 bool ata_busy_wait(u32 wait_msec)
 {
@@ -77,7 +158,45 @@ bool ata_busy_wait(u32 wait_msec)
 }
 
 
-void ata_cmd_uv_issue( u8 feature )
+void ata_cmd_rext_pio( unsigned long user_arg )
+{
+	int i;
+	struct lax_io_rext_pio arg;
+	unsigned long byte_num;
+	unsigned char *buf;
+
+	copy_from_user(&arg, (void *)user_arg, sizeof(struct lax_io_rext_pio));
+
+	printk(KERN_INFO "block %ld\n", arg.block);
+
+	byte_num = 512 * arg.block;
+	buf = kmalloc(byte_num, GFP_KERNEL);
+	if(!buf){
+		return;
+	}
+
+	for(i = 0; i < byte_num; i++) {
+		buf[i] = (i % 0xFF) + 1;
+	}
+
+	copy_to_user(arg.buf, buf, byte_num);
+
+	kfree(buf);
+
+	/*
+	real process we should follow
+	ata_busy_wait(100);
+
+	ata_tf_write(tf);
+
+	iowrite8(ATA_CMD_PIO_READ_EXT, mod_ioaddr.command_addr);
+	wait for some time
+	DRQ check, read data
+	*/
+}
+
+
+void ata_cmd_uv_issue(u8 feature)
 {
 	bool ready;
 
@@ -91,7 +210,6 @@ void ata_cmd_uv_issue( u8 feature )
 
 	/* write command */
 	iowrite8(0xFF, mod_ioaddr.command_addr);
-
 
 	printk(KERN_INFO "Issue UV command with feature 0x%x\n", feature);
 
@@ -192,9 +310,12 @@ long ata_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long retval = 0;
 
-	if ( cmd == 0xFF ) {
+	if (cmd == 0xFF) {
 		/* only support VU command */
 		ata_cmd_uv_issue(arg);
+	}
+	else  if(cmd == ATA_CMD_PIO_READ_EXT){
+		ata_cmd_rext_pio(arg);
 	}
 	else {
 		printk(KERN_WARNING "not supported command 0x%x", cmd);
