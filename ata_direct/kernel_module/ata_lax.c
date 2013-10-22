@@ -19,8 +19,8 @@
  * compile-time options: to be removed as soon as all the drivers are
  * converted to the new debugging mechanism
  */
-#undef ATA_DEBUG		/* debugging output */
-#undef ATA_VERBOSE_DEBUG	/* yet more debugging output */
+#define ATA_DEBUG		/* debugging output */
+#define ATA_VERBOSE_DEBUG	/* yet more debugging output */
 
 
 /* note: prints function name for you */
@@ -80,19 +80,52 @@ module_param(ata_lax_minor, int, 0);
 
 bool ata_busy_wait(u32 wait_msec);
 
+void ata_tf_fill_lba_block(u32 lba, u16 block, struct ata_taskfile *tf)
+{
+	union u32_b {
+		u32  data;
+		u8   b[4];
+	}u32_data;
+
+	union u16_b {
+		u16 data;
+		u8   b[4];
+	}u16_data;
+
+	u32_data.data = lba;
+	tf->hob_lbah = 0;
+	tf->hob_lbam = 0;
+	tf->hob_lbal = u32_data.b[3];
+	tf->lbah = u32_data.b[2];
+	tf->lbam = u32_data.b[1];
+	tf->lbal = u32_data.b[0];
+
+	u16_data.data = block;
+	tf->hob_nsect = u16_data.b[1];
+	tf->nsect = u16_data.b[0];
+
+	tf->device = 0xa0 | 0x40; /* using lba, copied code from hparm*/
+	tf->feature = 0x0;
+
+	tf->flags = ATA_TFLAG_ISADDR | ATA_TFLAG_LBA48 | ATA_TFLAG_DEVICE;
+}
 
 void ata_tf_write(const struct ata_taskfile *tf)
 {
 	struct ata_io *ioaddr = &mod_ioaddr;
-	struct ata_lax_dev *ap = &mod_dev;
 	unsigned int is_addr = tf->flags & ATA_TFLAG_ISADDR;
 
+	/*
+	 * Device control currently not needed
+	struct ata_lax_dev *ap = &mod_dev;
 	if (tf->ctl != ap->last_ctl) {
 		if (ioaddr->ctl_addr)
 			iowrite8(tf->ctl, ioaddr->ctl_addr);
 		ap->last_ctl = tf->ctl;
 		ata_busy_wait(100);
 	}
+	*/
+
 
 	if (is_addr && (tf->flags & ATA_TFLAG_LBA48)) {
 		WARN_ON_ONCE(!ioaddr->ctl_addr);
@@ -157,17 +190,39 @@ bool ata_busy_wait(u32 wait_msec)
 	}
 }
 
+bool ata_drq_wait(u32 wait_msec)
+{
+	u32 i = 0;
+	u32 altstatus;
+
+	do {
+		altstatus = ioread8(mod_ioaddr.altstatus_addr);
+
+		if((ATA_DRDY | ATA_DRQ) == ((ATA_BUSY | ATA_DRDY | ATA_DRQ) & altstatus)) {
+			ioread8(mod_ioaddr.status_addr);
+			return true;
+		}
+		else {
+			msleep(1);
+		}
+		i ++;
+	} while (i < wait_msec);
+
+	return false;
+}
+
 
 void ata_cmd_rext_pio( unsigned long user_arg )
 {
-	int i;
+	int i,j;
 	struct lax_io_rext_pio arg;
 	unsigned long byte_num;
-	unsigned char *buf;
+	unsigned char *buf, *p;
+	struct ata_taskfile tf;
 
 	copy_from_user(&arg, (void *)user_arg, sizeof(struct lax_io_rext_pio));
 
-	printk(KERN_INFO "block %ld\n", arg.block);
+	printk(KERN_INFO "block %ld lba %ld\n", arg.block, arg.lba);
 
 	byte_num = 512 * arg.block;
 	buf = kmalloc(byte_num, GFP_KERNEL);
@@ -175,16 +230,45 @@ void ata_cmd_rext_pio( unsigned long user_arg )
 		return;
 	}
 
+
 	for(i = 0; i < byte_num; i++) {
-		buf[i] = (i % 0xFF) + 1;
+		/* buf[i] = (i % 0xFF) + 1; */
+		buf[i] = 0;
 	}
+
+
+	ata_busy_wait(100);
+	ata_tf_fill_lba_block(arg.lba, arg.block, &tf);
+	ata_tf_write(&tf);
+
+	msleep(1);
+
+	iowrite8(ATA_CMD_PIO_READ_EXT, mod_ioaddr.command_addr);
+
+	msleep(1);
+
+	p = buf;
+	for(j = 0; j < arg.block; j++) {
+		u16 *p2 = (u16 *)p;
+		if(ata_drq_wait(100) == false){
+			printk(KERN_INFO "waitng DRQ error\n");
+			break;
+		}
+		for(i = 0; i < 256; i++) {
+			printk(KERN_INFO "reading from %p\n", mod_ioaddr.data_addr);
+			*p2 = (u16)ioread16(mod_ioaddr.data_addr);
+			p2++;
+		}
+		p += 512;
+	}
+
 
 	copy_to_user(arg.buf, buf, byte_num);
 
 	kfree(buf);
 
 	/*
-	real process we should follow
+
 	ata_busy_wait(100);
 
 	ata_tf_write(tf);
@@ -211,7 +295,8 @@ void ata_cmd_uv_issue(u8 feature)
 	/* write command */
 	iowrite8(0xFF, mod_ioaddr.command_addr);
 
-	printk(KERN_INFO "Issue UV command with feature 0x%x\n", feature);
+	printk(KERN_INFO "Issue UV command with feature 0x %x to ports: command %p, feature %p\n",
+		feature, mod_ioaddr.command_addr, mod_ioaddr.feature_addr);
 
 end:
 	return;
@@ -224,6 +309,7 @@ static void ata_init_ioaddr(struct ata_io *ioaddr, void __iomem * const * iomap,
 {
 	int mem_off = ata_port * 2;
 
+	printk(KERN_INFO "IO base address is %p", iomap[mem_off]);
 	ioaddr->base_addr = iomap[mem_off];
 	ioaddr->altstatus_addr =
 	ioaddr->ctl_addr = (void __iomem *)
@@ -281,6 +367,7 @@ static int ata_scan_pci_info(void)
 		case PCI_CLASS_STORAGE_RAID:
 		case PCI_CLASS_STORAGE_SATA:
 		case 0x105: /* ATA controller, not defined in pci_ids.h */
+			printk(KERN_INFO "found storage PCI controller, class type %x", class);
 			ata_ctl_i ++;
 			break;
 		default:
@@ -292,10 +379,10 @@ static int ata_scan_pci_info(void)
 		}
 	}
 
-
-	printk(KERN_INFO "%d %d %d\n",ata_ctl_i, ata_ctl_index, ata_port_index);
+	//printk(KERN_INFO "%d %d %d\n",ata_ctl_i, ata_ctl_index, ata_port_index);
 	if (ata_ctl_i == ata_ctl_index) {
 		iomap = pcim_iomap_table(pdev);
+		printk(KERN_INFO "pci iomap %p %p %p %p", iomap, iomap[0], iomap[1], iomap[5]);
 		if(ata_resources_present(pdev, ata_port_index)){
 			ata_init_ioaddr(&mod_ioaddr, iomap, ata_port_index);
 			printk(KERN_INFO "  ATA port%d  initialized\n", ata_port_index);
@@ -377,7 +464,13 @@ static int ata_lax_init_module(void)
 
 static void ata_lax_exit_module(void)
 {
+	dev_t devno = MKDEV(ata_lax_major, ata_lax_minor);
+
 	printk(KERN_ALERT "Goodbye, ATA LAX Module unloaded\n");
+
+	cdev_del(&mod_dev.cdev);
+
+	unregister_chrdev_region(devno, 1);
 }
 
 module_init(ata_lax_init_module);

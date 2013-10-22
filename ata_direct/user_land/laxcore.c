@@ -49,7 +49,6 @@ void lax_command_rext_pio(unsigned long lba, unsigned short block, unsigned char
 	int cmd = ATA_CMD_PIO_READ_EXT;
         struct lax_io_rext_pio arg;
 
-	//arg.buf = malloc(byte_num);
 	arg.buf = data;
 	arg.block = block;
 	arg.lba = lba;
@@ -63,10 +62,8 @@ void lax_command_rext_pio(unsigned long lba, unsigned short block, unsigned char
 		if(i%16 == 15){
 			printf("\n");
 		}
-	}*/
-
-
-	//free(arg.buf);
+	}
+	*/
 }
 
 
