@@ -13,7 +13,7 @@ EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
 ifneq ($(KERNELRELEASE),)
 
-lax-objs := lax.o lax_sff.o lax_ahci.o
+lax-objs := lax_mod.o lax_sff.o lax_ahci.o
 obj-m	:= lax.o
 
 else
