@@ -1,7 +1,7 @@
 #!/bin/sh
 
-module="ata_lax"
-device="ata_lax"
+module="lax"
+device="lax"
 mode="664"
 
 # Group: since distributions do it differently, look for wheel or use staff

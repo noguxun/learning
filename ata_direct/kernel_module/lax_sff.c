@@ -9,6 +9,13 @@
 #include "lax_common.h"
 #include "lax_sff.h"
 
+struct lax_io_rext_pio {
+	unsigned long lba;
+	unsigned long block;
+	void __user *buf;
+};
+
+
 struct ata_io {
 	void __iomem    *base_addr;
 	void __iomem    *data_addr;
@@ -27,9 +34,6 @@ struct ata_io {
 
 static int ata_ctl_index = 0;
 static int ata_port_index = 1;
-
-static int ata_lax_major = 0;
-static int ata_lax_minor = 0;
 
 static struct ata_io mod_ioaddr;
 
@@ -333,12 +337,10 @@ static int ata_scan_pci_info(void)
 	return -1;
 }
 
-void ata_sff_set_para(int ctl_i, int port_i, int lax_major, int lax_minor)
+void ata_sff_set_para(int ctl_i, int port_i)
 {
 	ata_ctl_index = ctl_i;
 	ata_port_index = port_i;
-	ata_lax_major = lax_major;
-	ata_lax_minor = lax_minor;
 }
 
 long ata_sff_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)

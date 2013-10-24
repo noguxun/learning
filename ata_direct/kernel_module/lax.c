@@ -8,15 +8,12 @@
 
 #include "lax_common.h"
 #include "lax_sff.h"
+#include "lax_ahci.h"
 
-
-struct ata_lax_dev {
-	struct cdev cdev;
-};
 
 /* Default is likely to be /dev/sdb */
-static int ata_ctl_index = 0;
-static int ata_port_index = 1;
+static int ata_ctl_index = 0;    /* controller index, could have more than one controller */
+static int ata_port_index = 1;   /* port index of the selected controller */
 
 static int ata_lax_major = 0;
 static int ata_lax_minor = 0;
@@ -30,10 +27,16 @@ module_param(ata_lax_major, int, 0);
 module_param(ata_lax_minor, int, 0);
 module_param(ata_lax_enable_ahci, int, 0);
 
-static char *ata_lax_name = "ata_lax";
+MODULE_LICENSE("Dual BSD/GPL");
+
+struct ata_lax_dev {
+	struct cdev cdev;
+};
+
+
+static char *ata_lax_name = "lax";
 static struct ata_lax_dev mod_dev;
 
-MODULE_LICENSE("Dual BSD/GPL");
 
 static struct file_operations fops_sff = {
 	.owner = THIS_MODULE,
@@ -44,9 +47,9 @@ static struct file_operations fops_sff = {
 
 static struct file_operations fops_ahci = {
 	.owner = THIS_MODULE,
-	.unlocked_ioctl = NULL,
-	.open = NULL,
-	.release = NULL,
+	.unlocked_ioctl = ata_ahci_file_ioctl,
+	.open = ata_ahci_file_open,
+	.release = ata_ahci_file_release,
 };
 
 static int ata_lax_init_module(void)
@@ -54,6 +57,8 @@ static int ata_lax_init_module(void)
 	int result;
 	dev_t devno = 0;
 	struct file_operations *fops;
+
+	printk(KERN_INFO "ata_lax_init_module\n");
 
 	if (ata_lax_major) {
 		devno = MKDEV(ata_lax_major, ata_lax_minor);
@@ -69,10 +74,10 @@ static int ata_lax_init_module(void)
 
 	fops = ( ata_lax_enable_ahci ) ? (&fops_ahci) : (&fops_sff);
 	if( ata_lax_enable_ahci ) {
-		ata_sff_set_para(ata_ctl_index, ata_port_index, ata_lax_major, ata_lax_minor);
+		ata_ahci_set_para(ata_port_index);
 	}
 	else {
-
+		ata_sff_set_para(ata_ctl_index, ata_port_index);
 	}
 
 	cdev_init(&mod_dev.cdev, fops);

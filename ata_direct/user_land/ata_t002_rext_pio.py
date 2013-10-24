@@ -7,15 +7,6 @@ lib = cdll.LoadLibrary('./liblaxcore.so')
 
 lib.lax_open()
 
-# Send out a UV command
-loop_c = 1
-while True:
-    ome_int = lib.lax_command_vu_2b(c_long(0x2B))
-    loop_c -= 1
-    if loop_c <= 0:
-        break;
-
-
 # Send out a PIO read ext command
 block = 1
 lba = 123

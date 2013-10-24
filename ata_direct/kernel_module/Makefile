@@ -11,12 +11,10 @@ endif
 
 EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
-TARGET = ata_lax
-
 ifneq ($(KERNELRELEASE),)
 
-lax_module-objs := lax_sff.o
-obj-m	:= lax_module.o
+lax-objs := lax.o lax_sff.o lax_ahci.o
+obj-m	:= lax.o
 
 else
 

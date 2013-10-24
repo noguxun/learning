@@ -14,7 +14,7 @@ struct lax_io_rext_pio {
 };
 
 
-static char *lax_file = "/dev/ata_lax";
+static char *lax_file = "/dev/lax";
 static int  lax_fd = 0;
 
 
