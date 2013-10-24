@@ -12,7 +12,7 @@
 #include <linux/cdev.h>
 #include <asm/uaccess.h>
 
-#include "ata_lax.h"
+#include "lax_module.h"
 
 
 /*

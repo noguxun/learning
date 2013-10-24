@@ -15,7 +15,7 @@ TARGET = ata_lax
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= ata_lax.o
+obj-m	:= lax_module.o
 
 else
 

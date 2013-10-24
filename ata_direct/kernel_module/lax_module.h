@@ -1,5 +1,5 @@
-#ifndef _ATA_LAX_H
-#define _ATA_LAX_h
+#ifndef _LAX_MODULE_H
+#define _LAX_MODULE_H
 
 #include <linux/compiler.h>
 
