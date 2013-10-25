@@ -5,7 +5,10 @@ from ctypes import *
 
 lib = cdll.LoadLibrary('./liblaxcore.so')
 
-lib.lax_open()
+file_id = lib.lax_open()
+if file_id == 0:
+    print("lax open failed");
+
 
 # Send out a UV command
 loop_c = 1

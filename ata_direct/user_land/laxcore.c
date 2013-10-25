@@ -18,12 +18,14 @@ static char *lax_file = "/dev/lax";
 static int  lax_fd = 0;
 
 
-void lax_open(void)
+int lax_open(void)
 {
 	if(lax_fd) {
 		close(lax_fd);
 	}
 	lax_fd = open(lax_file, 0);
+
+	return lax_fd;
 }
 
 
