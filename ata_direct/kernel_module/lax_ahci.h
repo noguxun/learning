@@ -7,6 +7,14 @@ int ata_ahci_file_open(struct inode *inode, struct file *filp);
 int ata_ahci_file_release(struct inode *inode, struct file *filp);
 
 enum {
+	LAX_CMD_PORT_INIT     = 0x11,
+	LAX_CMD_VU_2B,
+	LAX_CMD_PRINT_REGS,
+	LAX_CMD_PORT_RESET,
+	LAX_CMD_LAST,
+};
+
+enum {
 	AHCI_PCI_BAR_STANDARD = 5,
 
 	AHCI_MAX_PORTS		= 32,

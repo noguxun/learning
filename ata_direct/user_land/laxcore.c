@@ -40,9 +40,17 @@ void lax_command_vu_2b(long fea)
 {
 	int cmd = ATA_CMD_VU;
 
+	printf("PLEASE DO NOT CALL THIS\n");
 	printf("ioctl simple vu 0x%x 0x%lx \n", cmd, fea);
 	ioctl(lax_fd, cmd, fea);
 }
+
+void lax_command_simple(int cmd, long feature)
+{
+	printf("ioctl simple cmd  0x%x 0x%lx \n", cmd, feature);
+	ioctl(lax_fd, cmd, feature);
+}
+
 
 void lax_command_rext_pio(unsigned long lba, unsigned short block, unsigned char data[])
 {

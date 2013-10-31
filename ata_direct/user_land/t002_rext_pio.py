@@ -20,7 +20,7 @@ for index in range(array_size):
     if (index % 0x10 == 0x0F):
         print("\n", end="")
 
-lib.close()
+lib.lax_close()
 
 
 

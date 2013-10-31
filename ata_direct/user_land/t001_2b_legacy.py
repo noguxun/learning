@@ -18,7 +18,7 @@ while True:
     if loop_c <= 0:
         break;
 
-lib.close()
+lib.lax_close()
 
 
 
