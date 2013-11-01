@@ -4,6 +4,7 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/fs.h>
 #include <linux/dma-mapping.h>
 #include <asm/uaccess.h>
 #include <asm-generic/dma-coherent.h>
@@ -29,7 +30,7 @@ struct lax_ahci {
 	void __iomem * iohba_base;
 	struct lax_port ports[AHCI_MAX_PORTS];
 	int port_index;
-	bool initialized;
+	bool port_initialized;
 };
 
 
@@ -52,14 +53,14 @@ static void __iomem * get_base(void)
 {\
 	u32 value;\
 	value = ioread32(get_base() + (reg));\
-	VPK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
+	PK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
 }
 
 #define hba_reg_print(reg) \
 {\
 	u32 value;\
 	value = ioread32(lax.iohba_base + reg);\
-	VPK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
+	PK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
 }
 
 static void p_regs(void)
@@ -106,15 +107,15 @@ static void ahci_port_clear_irq_err(void)
 	void __iomem * port_mmio = get_base();
 
 	/* clear SError */
-	tmp = readl(port_mmio + PORT_SCR_ERR);
+	tmp = ioread32(port_mmio + PORT_SCR_ERR);
 	VPK("PORT_SCR_ERR 0x%x\n", tmp);
-	writel(tmp, port_mmio + PORT_SCR_ERR);
+	iowrite32(tmp, port_mmio + PORT_SCR_ERR);
 
 	/* clear port IRQ */
-	tmp = readl(port_mmio + PORT_IRQ_STAT);
+	tmp = ioread32(port_mmio + PORT_IRQ_STAT);
 	VPK("PORT_IRQ_STAT 0x%x\n", tmp);
 	if (tmp) {
-		writel(tmp, port_mmio + PORT_IRQ_STAT);
+		iowrite32(tmp, port_mmio + PORT_IRQ_STAT);
 	}
 }
 
@@ -325,13 +326,13 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 	void __iomem * reg_issue = get_base() + PORT_CMD_ISSUE;
 	u32 bit_pos = 1 << tag;
 
+	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
 
 	ahci_tf_init(&tf);
 	ahci_fill_info(command, feature, 0, 0, &tf);
 
 	ahci_cmd_prep_nodata(&tf, 0, AHCI_CMD_CLR_BUSY);
 
-	VPK("issue cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
 	iowrite32(bit_pos, reg_issue);
 
 	if(ahci_busy_wait_not(100, reg_issue, bit_pos, bit_pos) == false) {
@@ -458,6 +459,7 @@ static int ahci_port_mem_alloc(void)
 	port->cmd_tbl = mem;
 	port->cmd_tbl_dma = mem_dma;
 
+	VPK("xgu1\n");
 	return 0;
 }
 
@@ -537,7 +539,7 @@ static void ahci_port_init(void)
 	u32 tmp;
 	void __iomem *port_mmio = get_base();
 
-	lax.initialized = true;
+	lax.port_initialized = true;
 
 	/* following the ahci spec 10.1.2  */
 	VPK("ahci port init\n");
@@ -560,9 +562,12 @@ static void ahci_port_init(void)
 
 	/* now start real init process*/
 	ahci_port_mem_alloc();
+	VPK("xgu0\n");
 	ahci_port_spin_up(); /* may be this is not needed */
+	VPK("xgu1\n");
 	ahci_port_enable_fis_recv();
 
+	VPK("xgu2\n");
 	/* disable port interrupt */
 	ahci_port_set_irq(0x0);
 	ahci_port_clear_irq_err();
@@ -581,27 +586,23 @@ static void ahci_port_deinit(void)
 }
 
 
-void ata_ahci_set_para(int port_i)
-{
-	lax.port_index = port_i;
-}
-
-long ata_ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
+long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long retval = 0;
 
-	if (cmd == LAX_CMD_VU_2B) {
+	printk(KERN_INFO "cmd 0x%x arg 0x%lx", cmd, arg);
+
+	if (cmd == LAX_CMD_TST_VU_2B) {
 		/* only support VU command */
-		ahci_port_init();
 		ahci_exec_nodata(0, 0xFF, 0x2B);
 	}
-	else if(cmd == LAX_CMD_PORT_INIT) {
+	else if(cmd == LAX_CMD_TST_PORT_INIT) {
 		ahci_port_init();
 	}
-	else if(cmd == LAX_CMD_PRINT_REGS) {
+	else if(cmd == LAX_CMD_TST_PRINT_REGS) {
 		p_regs();
 	}
-	else if(cmd == LAX_CMD_PORT_RESET) {
+	else if(cmd == LAX_CMD_TST_PORT_RESET) {
 		ahci_port_reset_hard();
 	}
 	else {
@@ -612,13 +613,38 @@ long ata_ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-int ahci_open(void)
+
+int ahci_file_open(struct inode *inode, struct file *filp)
+{
+	if(lax.port_initialized) {
+		return 0;
+	}
+
+	ahci_port_init();
+	return 0;
+}
+
+
+int ahci_file_release(struct inode *inode, struct file *filp)
+{
+	if(lax.port_initialized) {
+		ahci_port_deinit();
+	}
+
+	lax.port_initialized = 0;
+	return 0;
+}
+
+
+void ahci_module_init(int port_i)
 {
 	struct pci_dev *pdev = NULL;
 	bool found = false;
 	void __iomem * const * iomap;
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port;
 
+	lax.port_index = port_i;
+	port = &lax.ports[lax.port_index];
 
 	for_each_pci_dev(pdev) {
 		u16 class = pdev->class >> 8;
@@ -632,41 +658,22 @@ int ahci_open(void)
 
 	if(found == false) {
 		VPK("AHCI device NOT found \n");
-		return -EBADSLT;
+		return;
 	}
 
 	lax.pdev = pdev;
 
 	iomap = pcim_iomap_table(lax.pdev);
 	lax.iohba_base = iomap[AHCI_PCI_BAR_STANDARD];
-	lax.initialized = false;
+	lax.port_initialized = false;
 
 	port->ioport_base = lax.iohba_base + 0x100 + (lax.port_index * 0x80);
 	port->cmd_slot = NULL;
 
-
 	VPK("iohba base address %p", lax.iohba_base);
-
-	return 0;
 }
 
-static void ahci_close(void)
+void ahci_module_deinit(void)
 {
-	if(lax.initialized) {
-		ahci_port_deinit();
-	}
+
 }
-
-int ata_ahci_file_open(struct inode *inode, struct file *filp)
-{
-	ahci_open();
-	return 0;
-}
-
-
-int ata_ahci_file_release(struct inode *inode, struct file *filp)
-{
-	ahci_close();
-	return 0;
-}
-

@@ -4,8 +4,8 @@
  * compile-time options: to be removed as soon as all the drivers are
  * converted to the new debugging mechanism
  */
-#define LAX_DEBUG		/* debugging output */
-#define LAX_VERBOSE_DEBUG	/* yet more debugging output */
+#undef LAX_DEBUG		/* debugging output */
+#undef LAX_VERBOSE_DEBUG	/* yet more debugging output */
 
 
 /* note: prints function name for you */
@@ -17,9 +17,9 @@
 #define VPK(fmt, args...)
 #endif
 #else
-#define DPRINTK(fmt, args...)
-#define VPRINTK(fmt, args...)
+#define VPK(fmt, args...)
 #endif
 
+#define PK(fmt, args...) printk(KERN_INFO fmt, ## args )
 
 #endif

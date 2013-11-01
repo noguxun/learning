@@ -1,17 +1,18 @@
 #ifndef _LAX_AHCI_H
 #define _LAX_AHCI_H
 
-void ata_ahci_set_para(int port_i);
-long ata_ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-int ata_ahci_file_open(struct inode *inode, struct file *filp);
-int ata_ahci_file_release(struct inode *inode, struct file *filp);
+void ahci_module_init(int port_i);
+void ahci_module_deinit(void);
+long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+int ahci_file_open(struct inode *inode, struct file *filp);
+int ahci_file_release(struct inode *inode, struct file *filp);
 
 enum {
-	LAX_CMD_PORT_INIT     = 0x11,
-	LAX_CMD_VU_2B,
-	LAX_CMD_PRINT_REGS,
-	LAX_CMD_PORT_RESET,
-	LAX_CMD_LAST,
+	LAX_CMD_TST_START = 0x101,
+	LAX_CMD_TST_PORT_INIT,
+	LAX_CMD_TST_VU_2B,
+	LAX_CMD_TST_PRINT_REGS,
+	LAX_CMD_TST_PORT_RESET,
 };
 
 enum {

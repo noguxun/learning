@@ -1,4 +1,4 @@
-
+/* this file is not maintained anymore */
 #include <linux/kernel.h>
 #include <linux/ata.h>
 #include <linux/pci.h>
