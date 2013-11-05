@@ -4,8 +4,8 @@
  * compile-time options: to be removed as soon as all the drivers are
  * converted to the new debugging mechanism
  */
-#undef LAX_DEBUG		/* debugging output */
-#undef LAX_VERBOSE_DEBUG	/* yet more debugging output */
+#define LAX_DEBUG		/* debugging output */
+#define LAX_VERBOSE_DEBUG	/* yet more debugging output */
 
 
 /* note: prints function name for you */

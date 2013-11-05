@@ -12,7 +12,14 @@
 #include "lax_common.h"
 #include "lax_ahci.h"
 
+struct lax_sg {
+	void *mem;
+	dma_addr_t mem_dma;
+	u32 length;
+};
+
 struct lax_port {
+	u32 irq_mask;
 	void __iomem * ioport_base;
 
         struct ahci_cmd_hdr *cmd_slot;
@@ -23,6 +30,8 @@ struct lax_port {
 
 	void *cmd_tbl;
 	dma_addr_t cmd_tbl_dma;
+
+	struct lax_sg sg[32 * 8];
 };
 
 struct lax_ahci {
@@ -95,13 +104,18 @@ static void p_regs(void)
 	port_reg_print(PORT_DEVSLP);
 }
 
-static void ahci_port_set_irq(u32 irq_mask)
+static u32 ahci_port_set_irq(u32 irq_mask)
 {
+	u32 org_irq_mask;
+
+	org_irq_mask = ioread32(get_base() + PORT_IRQ_MASK);
 	iowrite32(irq_mask, get_base() + PORT_IRQ_MASK);
 	VPK("set port irq max to %x\n", irq_mask);
+
+	return org_irq_mask;
 }
 
-static void ahci_port_clear_irq_err(void)
+static void ahci_port_clear_sata_err(void)
 {
 	u32 tmp;
 	void __iomem * port_mmio = get_base();
@@ -110,6 +124,12 @@ static void ahci_port_clear_irq_err(void)
 	tmp = ioread32(port_mmio + PORT_SCR_ERR);
 	VPK("PORT_SCR_ERR 0x%x\n", tmp);
 	iowrite32(tmp, port_mmio + PORT_SCR_ERR);
+}
+
+static void ahci_port_clear_irq(void)
+{
+	u32 tmp;
+	void __iomem * port_mmio = get_base();
 
 	/* clear port IRQ */
 	tmp = ioread32(port_mmio + PORT_IRQ_STAT);
@@ -191,6 +211,63 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	}
 
 	ahci_fill_cmd_slot(port, tag, opts);
+}
+
+static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf, unsigned int tag, u32 cmd_opts)
+{
+	void * cmd_tbl;
+	unsigned int n_elem;
+	const u32 cmd_fis_len = 5; /* five dwords */
+	u32 opts;
+	struct lax_port *port = &(lax.ports[lax.port_index]);
+	u32 *sg_base;
+
+	VPK("datain cmd (max 4M data) prepare \n");
+	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
+
+	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
+
+	n_elem = 0;
+	/*
+	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
+	 */
+	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
+	*(sg_base) = cpu_to_le32(port->sg[0].mem_dma & 0xffffffff);
+	*(sg_base + 1) = cpu_to_le32(port->sg[0].mem_dma >> 16) >> 16;
+	*(sg_base + 2) = 0;
+	*(sg_base + 3) = cpu_to_le32(port->sg[0].length -1);
+	//*(sg_base + 3) = cpu_to_le32(512 -1);
+	n_elem = 1;
+	mb();
+
+	PK("sg setting %x %x %x %x\n", sg_base[0], sg_base[1], sg_base[2], sg_base[3]);
+
+	/*
+	 * Fill in command slot information.
+	 */
+	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
+	if (tf->flags & ATA_TFLAG_WRITE) {
+		opts |= AHCI_CMD_WRITE;
+	}
+
+	ahci_fill_cmd_slot(port, tag, opts);
+}
+
+static bool ahci_busy_wait_irq(u32 wait_msec)
+{
+	u32 i = wait_msec;
+	u32 tmp;
+	void __iomem * port_mmio = get_base();
+
+	do {
+		tmp = ioread32(port_mmio + PORT_IRQ_STAT);
+		if(tmp) {
+			return true;
+		}
+		msleep(1);
+	}while(i);
+
+	return false;
 }
 
 static bool ahci_busy_wait_not(u32 wait_msec, void __iomem *reg, u32 mask, u32 val)
@@ -320,6 +397,41 @@ static void ahci_tf_init(struct ata_taskfile *tf)
 	tf->ctl = ATA_DEVCTL_OBS;     // obsolete bit in device control
 }
 
+static void ahci_exec_pio_datain_4m(unsigned int tag, u8 command, u16 feature)
+{
+	struct ata_taskfile tf;
+	void __iomem * reg_issue = get_base() + PORT_CMD_ISSUE;
+	u32 bit_pos = 1 << tag;
+	int i;
+	struct lax_port *port = &lax.ports[lax.port_index];
+
+	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
+
+	ahci_tf_init(&tf);
+	ahci_fill_info(command, feature, 0, 1, &tf);
+
+	/* test if this works */
+	tf.ctl = 0;
+
+	ahci_cmd_prep_pio_datain_max_4m(&tf, tag, 0);
+
+	iowrite32(bit_pos, reg_issue);
+
+	if(ahci_busy_wait_irq(1000) == false) {
+		printk(KERN_ERR "timeout exec command 0x%x\n", command);
+		return;
+	}
+
+	ahci_port_clear_irq();
+
+	/* dump results */
+	PK("reviced %d bytes\n", port->cmd_slot[tag].status);
+	for(i = 0; i < port->cmd_slot[tag].status; i++) {
+		unsigned char *p = (unsigned char*)port->sg[0].mem;
+		PK("%2x ", p[i]);
+	}
+}
+
 static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 {
 	struct ata_taskfile tf;
@@ -331,7 +443,7 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 	ahci_tf_init(&tf);
 	ahci_fill_info(command, feature, 0, 0, &tf);
 
-	ahci_cmd_prep_nodata(&tf, 0, AHCI_CMD_CLR_BUSY);
+	ahci_cmd_prep_nodata(&tf, tag, AHCI_CMD_CLR_BUSY);
 
 	iowrite32(bit_pos, reg_issue);
 
@@ -424,6 +536,40 @@ static bool ahci_port_verify_dev_idle(void)
 	return true;
 }
 
+#define TST_SG_SIZE1  512
+static int ahci_port_sg_alloc_one(void)
+{
+	dma_addr_t mem_dma;
+	void *mem;
+	size_t dma_sz;
+	struct lax_port *port = &lax.ports[lax.port_index];
+
+	dma_sz = TST_SG_SIZE1;
+
+	mem = dma_alloc_coherent(&(lax.pdev->dev), dma_sz, &mem_dma, GFP_KERNEL);
+	if(!mem) {
+		PK("memory allocation failed\n");
+		return -ENOMEM;
+	}
+	VPK("allocated dma memory 0x%p for scatter list\n", mem);
+	memset(mem, 0 , dma_sz);
+
+	port->sg[0].mem = mem;
+	port->sg[0].mem_dma = mem_dma;
+	port->sg[0].length = dma_sz;
+
+	return 0;
+}
+
+static void ahci_port_sg_free_one(void)
+{
+	size_t dma_sz;
+	struct lax_port *port = &lax.ports[lax.port_index];
+
+	dma_sz = TST_SG_SIZE1;
+
+	dma_free_coherent(&(lax.pdev->dev), port->sg[0].length,	port->sg[0].mem, port->sg[0].mem_dma);
+}
 
 static int ahci_port_mem_alloc(void)
 {
@@ -439,9 +585,10 @@ static int ahci_port_mem_alloc(void)
 
 	mem = dma_alloc_coherent(&(lax.pdev->dev), dma_sz, &mem_dma, GFP_KERNEL);
 	if(!mem) {
-		VPK("memory allocation failed\n");
+		PK("memory allocation failed\n");
 		return -ENOMEM;
 	}
+	VPK("allocated dma memory 0x%p for command slot\n", mem);
 	memset(mem, 0 , dma_sz);
 
 	port->cmd_slot = mem;
@@ -459,7 +606,8 @@ static int ahci_port_mem_alloc(void)
 	port->cmd_tbl = mem;
 	port->cmd_tbl_dma = mem_dma;
 
-	VPK("xgu1\n");
+	ahci_port_sg_alloc_one();
+
 	return 0;
 }
 
@@ -470,7 +618,15 @@ static void ahci_port_mem_free(void)
 	if(port->cmd_slot){
 		dma_free_coherent(&(lax.pdev->dev), AHCI_PORT_PRIV_DMA_SZ,
 				port->cmd_slot, port->cmd_slot_dma);
+		ahci_port_sg_free_one();
 	}
+}
+
+static void ahci_port_restore_irq_mask(void)
+{
+	struct lax_port *port = &lax.ports[lax.port_index];
+
+	ahci_port_set_irq(port->irq_mask);
 }
 
 static void ahci_port_reset_hard(void)
@@ -526,7 +682,8 @@ static void ahci_port_reset_hard(void)
 	tmp = ioread32(port_mmio + PORT_SCR_ERR);
 	iowrite32(tmp, port_mmio + PORT_SCR_ERR);
 
-	ahci_port_clear_irq_err();
+	ahci_port_clear_irq();
+	ahci_port_clear_sata_err();
 
 	if(ahci_port_verify_dev_idle() == false) {
 		VPK("reset idle verify failed\n");
@@ -538,6 +695,12 @@ static void ahci_port_init(void)
 {
 	u32 tmp;
 	void __iomem *port_mmio = get_base();
+	struct lax_port *port = &lax.ports[lax.port_index];
+
+	if(lax.port_initialized == true) {
+		return;
+	}
+
 
 	lax.port_initialized = true;
 
@@ -562,15 +725,14 @@ static void ahci_port_init(void)
 
 	/* now start real init process*/
 	ahci_port_mem_alloc();
-	VPK("xgu0\n");
 	ahci_port_spin_up(); /* may be this is not needed */
-	VPK("xgu1\n");
 	ahci_port_enable_fis_recv();
 
-	VPK("xgu2\n");
 	/* disable port interrupt */
-	ahci_port_set_irq(0x0);
-	ahci_port_clear_irq_err();
+	port->irq_mask = ahci_port_set_irq(0x0);
+
+	ahci_port_clear_irq();
+
 	if(ahci_port_verify_dev_idle() == false) {
 		VPK("device not preset, shall we try hard port reset?");
 		return;
@@ -582,7 +744,10 @@ static void ahci_port_init(void)
 static void ahci_port_deinit(void)
 {
 	//struct lax_port *port = &lax.ports[lax.port_index];
-	ahci_port_mem_free();
+	if(lax.port_initialized == true) {
+		lax.port_initialized = false;
+		ahci_port_mem_free();
+	}
 }
 
 
@@ -590,7 +755,7 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long retval = 0;
 
-	printk(KERN_INFO "cmd 0x%x arg 0x%lx", cmd, arg);
+	printk(KERN_INFO "cmd 0x%x arg 0x%lx ", cmd, arg);
 
 	if (cmd == LAX_CMD_TST_VU_2B) {
 		/* only support VU command */
@@ -605,8 +770,14 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	else if(cmd == LAX_CMD_TST_PORT_RESET) {
 		ahci_port_reset_hard();
 	}
+	else if(cmd == LAX_CMD_TST_ID) {
+		ahci_exec_pio_datain_4m(0, 0xEC, 0xFF00);
+	}
+	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
+		ahci_port_restore_irq_mask();
+	}
 	else {
-		printk(KERN_WARNING "not supported command 0x%x", cmd);
+		printk(KERN_WARNING "not supported command 0x%x ", cmd);
 		retval = -EPERM;
 	}
 
@@ -616,10 +787,6 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 int ahci_file_open(struct inode *inode, struct file *filp)
 {
-	if(lax.port_initialized) {
-		return 0;
-	}
-
 	ahci_port_init();
 	return 0;
 }
@@ -627,11 +794,7 @@ int ahci_file_open(struct inode *inode, struct file *filp)
 
 int ahci_file_release(struct inode *inode, struct file *filp)
 {
-	if(lax.port_initialized) {
-		ahci_port_deinit();
-	}
-
-	lax.port_initialized = 0;
+	ahci_port_deinit();
 	return 0;
 }
 
