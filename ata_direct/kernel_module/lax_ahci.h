@@ -6,6 +6,7 @@ void ahci_module_deinit(void);
 long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
 int ahci_file_open(struct inode *inode, struct file *filp);
 int ahci_file_release(struct inode *inode, struct file *filp);
+int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma);
 
 enum {
 	LAX_CMD_TST_START = 0x101,

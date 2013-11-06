@@ -5,12 +5,16 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/mm.h>
 #include <linux/dma-mapping.h>
 #include <asm/uaccess.h>
 #include <asm-generic/dma-coherent.h>
 
 #include "lax_common.h"
 #include "lax_ahci.h"
+
+#define LAX_SG_ENTRY_SIZE     (4l*1024l*1024l)
+#define LAX_SG_COUNT          (8l)    /* 32M/4M */
 
 struct lax_sg {
 	void *mem;
@@ -31,7 +35,7 @@ struct lax_port {
 	void *cmd_tbl;
 	dma_addr_t cmd_tbl_dma;
 
-	struct lax_sg sg[32 * 8];
+	struct lax_sg sg[LAX_SG_COUNT];
 };
 
 struct lax_ahci {
@@ -213,7 +217,8 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
-static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf, unsigned int tag, u32 cmd_opts)
+static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf,
+						unsigned int tag, u32 cmd_opts)
 {
 	void * cmd_tbl;
 	unsigned int n_elem;
@@ -236,7 +241,6 @@ static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf, unsig
 	*(sg_base + 1) = cpu_to_le32(port->sg[0].mem_dma >> 16) >> 16;
 	*(sg_base + 2) = 0;
 	*(sg_base + 3) = cpu_to_le32(port->sg[0].length -1);
-	//*(sg_base + 3) = cpu_to_le32(512 -1);
 	n_elem = 1;
 	mb();
 
@@ -290,7 +294,7 @@ static bool ahci_busy_wait_not(u32 wait_msec, void __iomem *reg, u32 mask, u32 v
 	} while (i < wait_msec);
 
 	if(!condition){
-		printk(KERN_ERR "wait failed on %d msec wait, reg_val %x mask %x, val %x i %d wait %d\n",
+		PK( "wait failed on %d msec wait, reg_val %x mask %x, val %x i %d wait %d\n",
 			wait_msec, reg_val, mask, val, i, wait_msec );
 	  	return false;
 	}
@@ -349,7 +353,10 @@ static bool ahci_port_disable_fis_recv(void)
 
 	tmp = ioread32(port_mmio + PORT_CMD);
 	if(tmp & PORT_CMD_FIS_RX) {
-		if(ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_FIS_ON, PORT_CMD_FIS_ON) == false) {
+		bool stat;
+		stat = ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_FIS_ON,
+						PORT_CMD_FIS_ON);
+		if(stat == false) {
 			VPK("timeout wait fis stop\n");
 			p_regs();
 		 	return false;
@@ -472,7 +479,8 @@ static bool ahci_port_engine_stop(void)
 	iowrite32(tmp, port_mmio + PORT_CMD);
 
 	/* wait for engine to stop. This could be as long as 500 msec */
-	if(ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_LIST_ON, PORT_CMD_LIST_ON) == false) {
+	if(ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_LIST_ON,
+				PORT_CMD_LIST_ON) == false) {
 		VPK("timeout wait engine stop\n");
 		p_regs();
 	 	return false;
@@ -536,39 +544,39 @@ static bool ahci_port_verify_dev_idle(void)
 	return true;
 }
 
-#define TST_SG_SIZE1  512
 static int ahci_port_sg_alloc_one(void)
 {
 	dma_addr_t mem_dma;
 	void *mem;
-	size_t dma_sz;
 	struct lax_port *port = &lax.ports[lax.port_index];
+	int i;
 
-	dma_sz = TST_SG_SIZE1;
+	for(i = 0; i < LAX_SG_COUNT; i++) {
+		mem = dma_zalloc_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
+						&mem_dma, GFP_KERNEL);
+		if(!mem) {
+			PK("memory allocation failed\n");
+			return -ENOMEM;
+		}
+		VPK("allocated dma memory 0x%p for scatter list\n", mem);
 
-	mem = dma_alloc_coherent(&(lax.pdev->dev), dma_sz, &mem_dma, GFP_KERNEL);
-	if(!mem) {
-		PK("memory allocation failed\n");
-		return -ENOMEM;
+		port->sg[i].mem = mem;
+		port->sg[i].mem_dma = mem_dma;
+		port->sg[i].length = LAX_SG_ENTRY_SIZE;
 	}
-	VPK("allocated dma memory 0x%p for scatter list\n", mem);
-	memset(mem, 0 , dma_sz);
-
-	port->sg[0].mem = mem;
-	port->sg[0].mem_dma = mem_dma;
-	port->sg[0].length = dma_sz;
 
 	return 0;
 }
 
 static void ahci_port_sg_free_one(void)
 {
-	size_t dma_sz;
+	int i;
 	struct lax_port *port = &lax.ports[lax.port_index];
 
-	dma_sz = TST_SG_SIZE1;
-
-	dma_free_coherent(&(lax.pdev->dev), port->sg[0].length,	port->sg[0].mem, port->sg[0].mem_dma);
+	for(i = 0; i < LAX_SG_COUNT; i++) {
+		dma_free_coherent(&(lax.pdev->dev), port->sg[i].length,
+				port->sg[i].mem, port->sg[i].mem_dma);
+	}
 }
 
 static int ahci_port_mem_alloc(void)
@@ -641,7 +649,8 @@ static void ahci_port_reset_hard(void)
 	iowrite32(tmp, port_mmio + PORT_CMD);
 
 	/* wait for engine to stop. This could be as long as 500 msec */
-	if(ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_LIST_ON, PORT_CMD_LIST_ON) == false) {
+	if(ahci_busy_wait_not(500, port_mmio + PORT_CMD, PORT_CMD_LIST_ON,
+				PORT_CMD_LIST_ON) == false) {
 		VPK("timeout wait engine stop\n");
 	}
 
@@ -798,7 +807,6 @@ int ahci_file_release(struct inode *inode, struct file *filp)
 	return 0;
 }
 
-
 void ahci_module_init(int port_i)
 {
 	struct pci_dev *pdev = NULL;
@@ -840,3 +848,45 @@ void ahci_module_deinit(void)
 {
 
 }
+
+static void ahci_vma_open(struct vm_area_struct *vma)
+{
+
+}
+
+static void ahci_vma_close(struct vm_area_struct *vma)
+{
+
+}
+
+static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
+{
+	unsigned long offset;
+	int retval = VM_FAULT_NOPAGE;
+	int sgi;
+
+	offset = (unsigned long)() + (vma->vm_pgoff << PAGE_SHIFT);
+	if (offset > (LAX_SG_ENTRY_SIZE * LAX_SG_COUNT)) {
+		goto out;
+	}
+
+	for(sgi = 0; sgi < )
+
+	retval = 0;
+out:
+	return retval;
+}
+
+struct vm_operations_struct ahci_vm_ops = {
+	.open  = ahci_vma_open,
+	.close = ahci_vma_close,
+	.fault = ahci_vma_nopage,
+};
+
+int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
+{
+	return 0;
+}
+
+
+

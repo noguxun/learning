@@ -39,6 +39,7 @@ static struct file_operations fops_ahci = {
 	.unlocked_ioctl = ahci_file_ioctl,
 	.open           = ahci_file_open,
 	.release        = ahci_file_release,
+	.mmap           = ahci_file_mmap,
 };
 
 static int ata_lax_init_module(void)
