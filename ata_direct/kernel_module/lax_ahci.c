@@ -15,6 +15,7 @@
 
 #define LAX_SG_ENTRY_SIZE     (4l*1024l*1024l)
 #define LAX_SG_COUNT          (8l)    /* 32M/4M */
+#define LAX_SG_ALL_SIZE       ((LAX_SG_COUNT) * (LAX_SG_ENTRY_SIZE))
 
 struct lax_sg {
 	void *mem;
@@ -868,58 +869,65 @@ static void ahci_vma_close(struct vm_area_struct *vma)
 
 }
 
-/*
+
 static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
-	return 0;
+	unsigned long offset_in_file;
+	int retval = VM_FAULT_NOPAGE;
+	int sg_index;
+	struct lax_port *port = get_port();
+	int sg_entry_offset;
+	unsigned char *p;
+	struct page *page;
+
+	offset_in_file = (unsigned long)(vmf->virtual_address - vma->vm_start) +
+				(vma->vm_pgoff << PAGE_SHIFT);
+	if(offset_in_file >= LAX_SG_ALL_SIZE) {
+		goto out;
+	}
+
+	sg_index = offset_in_file / LAX_SG_ENTRY_SIZE;
+	sg_entry_offset = offset_in_file % LAX_SG_ENTRY_SIZE;
+	VPK("nopage %d %d\n", sg_index, sg_entry_offset);
+
+	p = (((unsigned char *)port->sg[sg_index].mem) + sg_entry_offset);
+	if(!p) {
+		goto out;
+	}
+
+	page = virt_to_page(p);
+	get_page(page);
+	vmf->page = page;
+	retval = 0;
+
+out:
+	return retval;
 }
-*/
+
 
 struct vm_operations_struct ahci_vm_ops = {
 	.open  = ahci_vma_open,
 	.close = ahci_vma_close,
-	/* .fault = ahci_vma_nopage, */
+	.fault = ahci_vma_nopage,
 };
+
+
 
 int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-	unsigned long size;
-	unsigned long offset_in_file;
-	int retval;
-	unsigned long pfn;
+	int retval = 0, i;
+	unsigned char * p;
 	struct lax_port *port = get_port();
 
-	size = vma->vm_end - vma->vm_start;
-	offset_in_file = vma->vm_pgoff << PAGE_SHIFT;
+	for(i = 0; i < LAX_SG_COUNT; i++) {
 
-	VPK("mapping offset 0x%lx, size 0x%lx ", offset_in_file, size);
-	/* map only one sg entry */
-	if(offset_in_file + size > LAX_SG_ENTRY_SIZE) {
-		PK("mapping size too big\n");
-		retval = -EAGAIN;
-		goto out;
-	}
-
-	VPK("mapping setting test data\n");
-
-	t1[0] = 0x0;
-	t1[1] = 0x1;
-
-
-	/* Test set some data */
-
-	pfn = __pa(t1 + offset_in_file) >> PAGE_SHIFT;
-
-	retval = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
-	if(retval) {
-		PK("mapping failed on remap_pfn_range, pfn %ld", pfn);
-		retval = -EAGAIN;
+		p = (unsigned char*)port->sg[i].mem;
+		p[0] = 0x0 + i * 10;
+		p[1] = 0x1 + i * 10;
 	}
 
 	vma->vm_ops = &ahci_vm_ops;
 	ahci_vma_open(vma);
-out:
-	PK("mapping ends %d", retval);
 	return retval;
 }
 

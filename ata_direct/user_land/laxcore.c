@@ -89,18 +89,20 @@ void lax_tst_mmap(void)
 	void *addr;
 	unsigned char * p;
 
-	len = ( 512 );
+	len = ( 32l * 1024l * 1024l ); // 32M
 	offset = 0;
 
 	printf("\n about to map\n");
 	addr = mmap(0, len, PROT_READ | PROT_EXEC, MAP_FILE | MAP_PRIVATE, lax_fd, offset);
-	printf("\n mmap called");
+
 	if (addr == (void *)-1) {
 		printf("mmap failed\n");
 		exit(1);
 	}
 
 	p = (unsigned char *)addr;
+	printf("\n mapped data: %d %d %d %d %d \n", p[0], p[1], p[2], p[3], p[4]);
+	p += (4l * 1024l * 1024l);
 	printf("\n mapped data: %d %d %d %d %d \n", p[0], p[1], p[2], p[3], p[4]);
 
 	munmap(addr, len);
