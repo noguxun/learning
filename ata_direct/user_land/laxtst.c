@@ -7,6 +7,7 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <limits.h>
+#include <dlfcn.h>
 
 
 #define ATA_CMD_PIO_READ_EXT  (0x24)
@@ -27,7 +28,6 @@ static int  lax_fd = 0;
 
 int lax_open(void)
 {
-	printf("lax_open");
 	if(lax_fd) {
 		close(lax_fd);
 	}
@@ -93,7 +93,7 @@ void lax_tst_mmap(void)
 	offset = 0;
 
 	printf("\n about to map\n");
-	addr = mmap(0, len, PROT_READ | PROT_EXEC, MAP_FILE | MAP_PRIVATE, lax_fd, offset);
+	addr = mmap(0, len, PROT_READ, MAP_FILE | MAP_PRIVATE, lax_fd, offset);
 	printf("\n mmap called");
 	if (addr == (void *)-1) {
 		printf("mmap failed\n");
@@ -107,4 +107,30 @@ void lax_tst_mmap(void)
 }
 
 
+void main1(void)
+{
+	lax_open();
+	lax_tst_mmap();
+	lax_close();
+}
 
+
+int (*lax_open1)(void);
+void (*lax_tst_mmap1)(void);
+void (*lax_close1)(void);
+
+void main(void)
+{
+	void *handle;
+
+	handle = dlopen("liblaxcore.so", RTLD_NOW);
+	printf("hanle %p \n", handle);
+	lax_open1 = dlsym(handle, "lax_open");
+	lax_tst_mmap1 = dlsym(handle, "lax_tst_mmap");
+	lax_close1 = dlsym(handle, "lax_close");
+
+	lax_open1();
+	lax_tst_mmap1();
+	lax_close1();
+
+}

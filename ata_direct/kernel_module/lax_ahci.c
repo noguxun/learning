@@ -54,9 +54,14 @@ struct lax_ahci {
 
 static struct lax_ahci lax = { NULL, NULL };
 
-static void __iomem * get_base(void)
+static struct lax_port *get_port(void)
 {
-	struct lax_port *port = &(lax.ports[lax.port_index]);
+	return &(lax.ports[lax.port_index]);
+}
+
+static void __iomem *get_port_base(void)
+{
+	struct lax_port *port = get_port();
 
 	return port->ioport_base;
 }
@@ -65,7 +70,7 @@ static void __iomem * get_base(void)
 #define port_reg_print(reg) \
 {\
 	u32 value;\
-	value = ioread32(get_base() + (reg));\
+	value = ioread32(get_port_base() + (reg));\
 	PK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
 }
 
@@ -112,8 +117,8 @@ static u32 ahci_port_set_irq(u32 irq_mask)
 {
 	u32 org_irq_mask;
 
-	org_irq_mask = ioread32(get_base() + PORT_IRQ_MASK);
-	iowrite32(irq_mask, get_base() + PORT_IRQ_MASK);
+	org_irq_mask = ioread32(get_port_base() + PORT_IRQ_MASK);
+	iowrite32(irq_mask, get_port_base() + PORT_IRQ_MASK);
 	VPK("set port irq max to %x\n", irq_mask);
 
 	return org_irq_mask;
@@ -122,7 +127,7 @@ static u32 ahci_port_set_irq(u32 irq_mask)
 static void ahci_port_clear_sata_err(void)
 {
 	u32 tmp;
-	void __iomem * port_mmio = get_base();
+	void __iomem * port_mmio = get_port_base();
 
 	/* clear SError */
 	tmp = ioread32(port_mmio + PORT_SCR_ERR);
@@ -133,7 +138,7 @@ static void ahci_port_clear_sata_err(void)
 static void ahci_port_clear_irq(void)
 {
 	u32 tmp;
-	void __iomem * port_mmio = get_base();
+	void __iomem * port_mmio = get_port_base();
 
 	/* clear port IRQ */
 	tmp = ioread32(port_mmio + PORT_IRQ_STAT);
@@ -194,7 +199,7 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	unsigned int n_elem;
 	const u32 cmd_fis_len = 5; /* five dwords */
 	u32 opts;
-	struct lax_port *port = &(lax.ports[lax.port_index]);
+	struct lax_port *port = get_port();
 
 	VPK("nodata cmd prepare\n");
 	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
@@ -224,7 +229,7 @@ static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf,
 	unsigned int n_elem;
 	const u32 cmd_fis_len = 5; /* five dwords */
 	u32 opts;
-	struct lax_port *port = &(lax.ports[lax.port_index]);
+	struct lax_port *port = get_port();
 	u32 *sg_base;
 
 	VPK("datain cmd (max 4M data) prepare \n");
@@ -261,7 +266,7 @@ static bool ahci_busy_wait_irq(u32 wait_msec)
 {
 	u32 i = wait_msec;
 	u32 tmp;
-	void __iomem * port_mmio = get_base();
+	void __iomem * port_mmio = get_port_base();
 
 	do {
 		tmp = ioread32(port_mmio + PORT_IRQ_STAT);
@@ -341,7 +346,7 @@ static void ahci_fill_info(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_t
 static bool ahci_port_disable_fis_recv(void)
 {
 	u32   tmp;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 
 	VPK("disable the fis\n");
 
@@ -369,8 +374,8 @@ static bool ahci_port_disable_fis_recv(void)
 static void ahci_port_enable_fis_recv(void)
 {
 	u32  cap, tmp;
-	void __iomem *port_mmio = get_base();
-	struct lax_port *port = &lax.ports[lax.port_index];
+	void __iomem *port_mmio = get_port_base();
+	struct lax_port *port = get_port();
 
 	cap = ioread32(lax.iohba_base + HOST_CAP);
 
@@ -407,10 +412,10 @@ static void ahci_tf_init(struct ata_taskfile *tf)
 static void ahci_exec_pio_datain_4m(unsigned int tag, u8 command, u16 feature)
 {
 	struct ata_taskfile tf;
-	void __iomem * reg_issue = get_base() + PORT_CMD_ISSUE;
+	void __iomem * reg_issue = get_port_base() + PORT_CMD_ISSUE;
 	u32 bit_pos = 1 << tag;
 	int i;
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 
 	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
 
@@ -442,7 +447,7 @@ static void ahci_exec_pio_datain_4m(unsigned int tag, u8 command, u16 feature)
 static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 {
 	struct ata_taskfile tf;
-	void __iomem * reg_issue = get_base() + PORT_CMD_ISSUE;
+	void __iomem * reg_issue = get_port_base() + PORT_CMD_ISSUE;
 	u32 bit_pos = 1 << tag;
 
 	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
@@ -464,7 +469,7 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 static bool ahci_port_engine_stop(void)
 {
 	u32 tmp;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 
 
 	VPK("stopping engine\n");
@@ -492,7 +497,7 @@ static bool ahci_port_engine_stop(void)
 static void ahci_port_engine_start(void)
 {
 	u32 tmp;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 
 	VPK("engine start\n");
 	/* start engine */
@@ -505,7 +510,7 @@ static void ahci_port_engine_start(void)
 static void ahci_port_spin_up(void)
 {
 	u32 cmd, cap;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 
 	cap = ioread32(lax.iohba_base + HOST_CAP);
 
@@ -525,7 +530,7 @@ static void ahci_port_spin_up(void)
 static bool ahci_port_verify_dev_idle(void)
 {
 	u32 tmp;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 
 
 	/* Check the task file */
@@ -544,11 +549,11 @@ static bool ahci_port_verify_dev_idle(void)
 	return true;
 }
 
-static int ahci_port_sg_alloc_one(void)
+static int ahci_port_sg_alloc(void)
 {
 	dma_addr_t mem_dma;
 	void *mem;
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 	int i;
 
 	for(i = 0; i < LAX_SG_COUNT; i++) {
@@ -568,10 +573,10 @@ static int ahci_port_sg_alloc_one(void)
 	return 0;
 }
 
-static void ahci_port_sg_free_one(void)
+static void ahci_port_sg_free(void)
 {
 	int i;
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 
 	for(i = 0; i < LAX_SG_COUNT; i++) {
 		dma_free_coherent(&(lax.pdev->dev), port->sg[i].length,
@@ -584,7 +589,7 @@ static int ahci_port_mem_alloc(void)
 	dma_addr_t mem_dma;
 	void * mem;
 	size_t dma_sz;
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 
 	VPK("mem alloc for port 0x%x, port base addr %p\n", lax.port_index, port->ioport_base);
 
@@ -614,25 +619,25 @@ static int ahci_port_mem_alloc(void)
 	port->cmd_tbl = mem;
 	port->cmd_tbl_dma = mem_dma;
 
-	ahci_port_sg_alloc_one();
+	ahci_port_sg_alloc();
 
 	return 0;
 }
 
 static void ahci_port_mem_free(void)
 {
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 
 	if(port->cmd_slot){
 		dma_free_coherent(&(lax.pdev->dev), AHCI_PORT_PRIV_DMA_SZ,
 				port->cmd_slot, port->cmd_slot_dma);
-		ahci_port_sg_free_one();
+		ahci_port_sg_free();
 	}
 }
 
 static void ahci_port_restore_irq_mask(void)
 {
-	struct lax_port *port = &lax.ports[lax.port_index];
+	struct lax_port *port = get_port();
 
 	ahci_port_set_irq(port->irq_mask);
 }
@@ -640,7 +645,7 @@ static void ahci_port_restore_irq_mask(void)
 static void ahci_port_reset_hard(void)
 {
 	u32 tmp;
-	void __iomem *port_mmio = get_base();
+	void __iomem *port_mmio = get_port_base();
 	int tries = ATA_LINK_RESUME_TRIES;
 
 	/* setting HBA to idle */
@@ -703,8 +708,8 @@ static void ahci_port_reset_hard(void)
 static void ahci_port_init(void)
 {
 	u32 tmp;
-	void __iomem *port_mmio = get_base();
-	struct lax_port *port = &lax.ports[lax.port_index];
+	void __iomem *port_mmio = get_port_base();
+	struct lax_port *port = get_port();
 
 	if(lax.port_initialized == true) {
 		return;
@@ -752,7 +757,6 @@ static void ahci_port_init(void)
 
 static void ahci_port_deinit(void)
 {
-	//struct lax_port *port = &lax.ports[lax.port_index];
 	if(lax.port_initialized == true) {
 		lax.port_initialized = false;
 		ahci_port_mem_free();
@@ -793,10 +797,13 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
+unsigned char *t1;
 
 int ahci_file_open(struct inode *inode, struct file *filp)
 {
 	ahci_port_init();
+
+	t1 = (unsigned char *)__get_free_pages(GFP_KERNEL,0);
 	return 0;
 }
 
@@ -804,6 +811,8 @@ int ahci_file_open(struct inode *inode, struct file *filp)
 int ahci_file_release(struct inode *inode, struct file *filp)
 {
 	ahci_port_deinit();
+
+	free_pages((unsigned long)t1, 0);
 	return 0;
 }
 
@@ -815,7 +824,7 @@ void ahci_module_init(int port_i)
 	struct lax_port *port;
 
 	lax.port_index = port_i;
-	port = &lax.ports[lax.port_index];
+	port = get_port();
 
 	for_each_pci_dev(pdev) {
 		u16 class = pdev->class >> 8;
@@ -859,33 +868,59 @@ static void ahci_vma_close(struct vm_area_struct *vma)
 
 }
 
+/*
 static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
-	unsigned long offset;
-	int retval = VM_FAULT_NOPAGE;
-	int sgi;
-
-	offset = (unsigned long)() + (vma->vm_pgoff << PAGE_SHIFT);
-	if (offset > (LAX_SG_ENTRY_SIZE * LAX_SG_COUNT)) {
-		goto out;
-	}
-
-	for(sgi = 0; sgi < )
-
-	retval = 0;
-out:
-	return retval;
+	return 0;
 }
+*/
 
 struct vm_operations_struct ahci_vm_ops = {
 	.open  = ahci_vma_open,
 	.close = ahci_vma_close,
-	.fault = ahci_vma_nopage,
+	/* .fault = ahci_vma_nopage, */
 };
 
 int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-	return 0;
+	unsigned long size;
+	unsigned long offset_in_file;
+	int retval;
+	unsigned long pfn;
+	struct lax_port *port = get_port();
+
+	size = vma->vm_end - vma->vm_start;
+	offset_in_file = vma->vm_pgoff << PAGE_SHIFT;
+
+	VPK("mapping offset 0x%lx, size 0x%lx ", offset_in_file, size);
+	/* map only one sg entry */
+	if(offset_in_file + size > LAX_SG_ENTRY_SIZE) {
+		PK("mapping size too big\n");
+		retval = -EAGAIN;
+		goto out;
+	}
+
+	VPK("mapping setting test data\n");
+
+	t1[0] = 0x0;
+	t1[1] = 0x1;
+
+
+	/* Test set some data */
+
+	pfn = __pa(t1 + offset_in_file) >> PAGE_SHIFT;
+
+	retval = remap_pfn_range(vma, vma->vm_start, pfn, size, vma->vm_page_prot);
+	if(retval) {
+		PK("mapping failed on remap_pfn_range, pfn %ld", pfn);
+		retval = -EAGAIN;
+	}
+
+	vma->vm_ops = &ahci_vm_ops;
+	ahci_vma_open(vma);
+out:
+	PK("mapping ends %d", retval);
+	return retval;
 }
 
 
