@@ -614,8 +614,9 @@ static int ahci_port_sg_alloc(void)
 	int i;
 
 	for(i = 0; i < LAX_SG_COUNT; i++) {
+		/* __GFP_COMP is needed for parts to be mapped */
 		mem = dma_zalloc_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
-						&mem_dma, GFP_KERNEL);
+						&mem_dma, GFP_KERNEL | __GFP_COMP );
 		if(!mem) {
 			PK("memory allocation failed\n");
 			return -ENOMEM;
@@ -987,6 +988,3 @@ int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
 	ahci_vma_open(vma);
 	return 0;
 }
-
-
-
