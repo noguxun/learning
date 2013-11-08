@@ -13,39 +13,7 @@
 #include "lax_common.h"
 #include "lax_ahci.h"
 
-#define LAX_SG_ENTRY_SIZE     (4l*1024l*1024l)
-#define LAX_SG_COUNT          (8l)    /* 32M/4M */
-#define LAX_SG_ALL_SIZE       ((LAX_SG_COUNT) * (LAX_SG_ENTRY_SIZE))
 
-struct lax_sg {
-	void *mem;
-	dma_addr_t mem_dma;
-	u32 length;
-};
-
-struct lax_port {
-	u32 irq_mask;
-	void __iomem * ioport_base;
-
-        struct ahci_cmd_hdr *cmd_slot;
-	dma_addr_t cmd_slot_dma;
-
-	void * rx_fis;
-	dma_addr_t rx_fis_dma;
-
-	void *cmd_tbl;
-	dma_addr_t cmd_tbl_dma;
-
-	struct lax_sg sg[LAX_SG_COUNT];
-};
-
-struct lax_ahci {
-	struct pci_dev * pdev;
-	void __iomem * iohba_base;
-	struct lax_port ports[AHCI_MAX_PORTS];
-	int port_index;
-	bool port_initialized;
-};
 
 
 /*
@@ -263,6 +231,60 @@ static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf,
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
+static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int tag,
+			u32 cmd_opts, unsigned long size)
+{
+	void * cmd_tbl;
+	unsigned int n_elem;
+	const u32 cmd_fis_len = 5; /* five dwords */
+	u32 opts;
+	struct lax_port *port = get_port();
+	u32 *sg_base;
+	unsigned long len;
+
+	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
+
+	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
+
+	VPK("prepare data of size 0x%lx\n", size);
+
+	/*
+	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
+	 */
+	n_elem = 0;
+	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
+	while(true) {
+		len = LAX_SG_ENTRY_SIZE;
+		if(size < len) {
+			len = size;
+		}
+
+		*(sg_base) = cpu_to_le32(port->sg[n_elem].mem_dma & 0xffffffff);
+		*(sg_base + 1) = cpu_to_le32(port->sg[n_elem].mem_dma >> 16) >> 16;
+		*(sg_base + 2) = 0;
+		*(sg_base + 3) = cpu_to_le32(len -1);
+
+		VPK("sg set sg%d, len 0x%x, size 0x%lx \n", n_elem, *(sg_base + 3), size);
+
+		size -= len;
+		n_elem ++;
+		if(size == 0 ) {
+			break;
+		}
+		sg_base += 4;
+	}
+
+	/*
+	 * Fill in command slot information.
+	 */
+	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
+	if (tf->flags & ATA_TFLAG_WRITE) {
+		opts |= AHCI_CMD_WRITE;
+	}
+
+	ahci_fill_cmd_slot(port, tag, opts);
+}
+
 static bool ahci_busy_wait_irq(u32 wait_msec)
 {
 	u32 i = wait_msec;
@@ -445,6 +467,40 @@ static void ahci_exec_pio_datain_4m(unsigned int tag, u8 command, u16 feature)
 	}
 }
 
+static void ahci_exec_rw(unsigned long uarg)
+{
+	unsigned int tag = 0;
+	struct lax_rw arg;
+	struct ata_taskfile tf;
+	u32 bit_pos = 1 << tag;
+	u32 cmdopts = 0;
+	u8 command;
+	void __iomem * reg_issue = get_port_base() + PORT_CMD_ISSUE;
+
+	copy_from_user(&arg, (void *)uarg, sizeof(struct lax_rw));
+
+	ahci_tf_init(&tf);
+
+	if((arg.flags & RW_FLAG_XFER_MODE) == 0 && (arg.flags & RW_FLAG_DIRECTION) == 0) {
+		/* PIO READ */
+		command = ATA_CMD_PIO_READ_EXT;
+		if(arg.block == 0) {
+			arg.block = 0x10000;
+		}
+		ahci_fill_info(command, 0x00, arg.lba, arg.block, &tf);
+		VPK("pio read lba 0x%lx block 0x%lx\n", arg.lba, arg.block);
+		ahci_cmd_prep_pio_datain(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE);
+	}
+
+	iowrite32(bit_pos, reg_issue);
+
+	if(ahci_busy_wait_not(100, reg_issue, bit_pos, bit_pos) == false) {
+		printk(KERN_ERR "timeout exec command 0x%x\n", command);
+	}
+
+	ahci_port_clear_irq();
+}
+
 static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 {
 	struct ata_taskfile tf;
@@ -564,11 +620,11 @@ static int ahci_port_sg_alloc(void)
 			PK("memory allocation failed\n");
 			return -ENOMEM;
 		}
-		VPK("allocated dma memory 0x%p for scatter list\n", mem);
 
 		port->sg[i].mem = mem;
 		port->sg[i].mem_dma = mem_dma;
 		port->sg[i].length = LAX_SG_ENTRY_SIZE;
+		VPK("allocated dma memory for sg\n");
 	}
 
 	return 0;
@@ -579,8 +635,9 @@ static void ahci_port_sg_free(void)
 	int i;
 	struct lax_port *port = get_port();
 
+	VPK("free port sg mem \n");
 	for(i = 0; i < LAX_SG_COUNT; i++) {
-		dma_free_coherent(&(lax.pdev->dev), port->sg[i].length,
+		dma_free_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
 				port->sg[i].mem, port->sg[i].mem_dma);
 	}
 }
@@ -629,10 +686,13 @@ static void ahci_port_mem_free(void)
 {
 	struct lax_port *port = get_port();
 
+
 	if(port->cmd_slot){
+		ahci_port_sg_free();
+
+		VPK("free port mem \n");
 		dma_free_coherent(&(lax.pdev->dev), AHCI_PORT_PRIV_DMA_SZ,
 				port->cmd_slot, port->cmd_slot_dma);
-		ahci_port_sg_free();
 	}
 }
 
@@ -716,7 +776,6 @@ static void ahci_port_init(void)
 		return;
 	}
 
-
 	lax.port_initialized = true;
 
 	/* following the ahci spec 10.1.2  */
@@ -736,7 +795,6 @@ static void ahci_port_init(void)
 		VPK("failed state\n");
 		return;
 	}
-
 
 	/* now start real init process*/
 	ahci_port_mem_alloc();
@@ -769,7 +827,7 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
 	long retval = 0;
 
-	printk(KERN_INFO "cmd 0x%x arg 0x%lx ", cmd, arg);
+	printk(KERN_INFO "cmd 0x%x arg 0x%lx \n", cmd, arg);
 
 	if (cmd == LAX_CMD_TST_VU_2B) {
 		/* only support VU command */
@@ -785,10 +843,13 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ahci_port_reset_hard();
 	}
 	else if(cmd == LAX_CMD_TST_ID) {
-		ahci_exec_pio_datain_4m(0, 0xEC, 0xFF00);
+		ahci_exec_pio_datain_4m(0, ATA_CMD_ID_ATA, 0xFF00);
 	}
 	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
 		ahci_port_restore_irq_mask();
+	}
+	else if(cmd == LAX_CMD_TST_RW) {
+		ahci_exec_rw(arg);
 	}
 	else {
 		printk(KERN_WARNING "not supported command 0x%x ", cmd);
@@ -798,22 +859,27 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
-unsigned char *t1;
 
 int ahci_file_open(struct inode *inode, struct file *filp)
 {
 	ahci_port_init();
 
-	t1 = (unsigned char *)__get_free_pages(GFP_KERNEL,0);
 	return 0;
 }
 
 
 int ahci_file_release(struct inode *inode, struct file *filp)
 {
+	struct lax_port *port = get_port();
+	struct page *page;
+	page = virt_to_page((((unsigned char *)port->sg[0].mem) + 0));
+	VPK("release page %p mapcount %d\n", page, page->_mapcount.counter);
+	page = virt_to_page((((unsigned char *)port->sg[0].mem) + 4096));
+	VPK("release page %p mapcount %d\n", page, page->_mapcount.counter);
+
+
 	ahci_port_deinit();
 
-	free_pages((unsigned long)t1, 0);
 	return 0;
 }
 
@@ -888,7 +954,6 @@ static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	sg_index = offset_in_file / LAX_SG_ENTRY_SIZE;
 	sg_entry_offset = offset_in_file % LAX_SG_ENTRY_SIZE;
-	VPK("nopage %d %d\n", sg_index, sg_entry_offset);
 
 	p = (((unsigned char *)port->sg[sg_index].mem) + sg_entry_offset);
 	if(!p) {
@@ -896,6 +961,9 @@ static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 	}
 
 	page = virt_to_page(p);
+
+	VPK("nopage sg%d: offset %d page %p mapcount %d\n", sg_index, sg_entry_offset, page, page->_mapcount.counter);
+
 	get_page(page);
 	vmf->page = page;
 	retval = 0;
@@ -915,20 +983,9 @@ struct vm_operations_struct ahci_vm_ops = {
 
 int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
 {
-	int retval = 0, i;
-	unsigned char * p;
-	struct lax_port *port = get_port();
-
-	for(i = 0; i < LAX_SG_COUNT; i++) {
-
-		p = (unsigned char*)port->sg[i].mem;
-		p[0] = 0x0 + i * 10;
-		p[1] = 0x1 + i * 10;
-	}
-
 	vma->vm_ops = &ahci_vm_ops;
 	ahci_vma_open(vma);
-	return retval;
+	return 0;
 }
 
 

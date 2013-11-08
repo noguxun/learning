@@ -15,6 +15,11 @@ struct lax_io_rext_pio {
 	void __user *buf;
 };
 
+struct lax_io_rext_dma {
+	unsigned long lba;
+	unsigned long block;
+}
+
 
 struct ata_io {
 	void __iomem    *base_addr;

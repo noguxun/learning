@@ -15,7 +15,13 @@ enum {
 	LAX_CMD_TST_PRINT_REGS,
 	LAX_CMD_TST_PORT_RESET,
 	LAX_CMD_TST_ID,
+	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
+
+
+	RW_FLAG_XFER_MODE       = (1 << 1), /* PIO 0,  DMA 1 */
+	RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
+
 };
 
 enum {
@@ -136,12 +142,54 @@ enum {
 
 };
 
+#define LAX_SG_ENTRY_SIZE     (4l*1024l*1024l)
+#define LAX_SG_COUNT          (8l)    /* 32M/4M */
+#define LAX_SG_ALL_SIZE       ((LAX_SG_COUNT) * (LAX_SG_ENTRY_SIZE))
+#define LAX_SECTOR_SIZE       (512l)
+
 struct ahci_cmd_hdr {
 	__le32			opts;
 	__le32			status;
 	__le32			tbl_addr;
 	__le32			tbl_addr_hi;
 	__le32			reserved[4];
+};
+
+struct lax_rw {
+	unsigned long lba;
+	unsigned long block;
+	unsigned long flags;
+};
+
+
+struct lax_sg {
+	void *mem;
+	dma_addr_t mem_dma;
+	u32 length;
+};
+
+struct lax_port {
+	u32 irq_mask;
+	void __iomem * ioport_base;
+
+        struct ahci_cmd_hdr *cmd_slot;
+	dma_addr_t cmd_slot_dma;
+
+	void * rx_fis;
+	dma_addr_t rx_fis_dma;
+
+	void *cmd_tbl;
+	dma_addr_t cmd_tbl_dma;
+
+	struct lax_sg sg[LAX_SG_COUNT];
+};
+
+struct lax_ahci {
+	struct pci_dev * pdev;
+	void __iomem * iohba_base;
+	struct lax_port ports[AHCI_MAX_PORTS];
+	int port_index;
+	bool port_initialized;
 };
 
 #endif

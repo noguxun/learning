@@ -8,16 +8,35 @@
 #include <errno.h>
 #include <limits.h>
 
+static unsigned char * rw_buf = NULL;
+static unsigned long  rw_buf_len = ( 32l * 1024l * 1024l );
 
-#define ATA_CMD_PIO_READ_EXT  (0x24)
-#define ATA_CMD_VU            (0xFF)
+static void lax_map_rw_buf(void);
 
-#define ATA_FEATURE_2B  (0x2B)
+enum {
+	LAX_CMD_TST_START = 0x101,
+	LAX_CMD_TST_PORT_INIT,
+	LAX_CMD_TST_VU_2B,
+	LAX_CMD_TST_PRINT_REGS,
+	LAX_CMD_TST_PORT_RESET,
+	LAX_CMD_TST_ID,
+	LAX_CMD_TST_RW,
+	LAX_CMD_TST_RESTORE_IRQ,
+
+	RW_FLAG_XFER_MODE       = (1 << 1), /* DMA 0,  PIO 1 */
+	RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
+};
 
 struct lax_io_rext_pio {
 	unsigned long lba;
 	unsigned long block;
 	void *buf;
+};
+
+struct lax_rw {
+	unsigned long lba;
+	unsigned long block;
+	unsigned long flags;
 };
 
 
@@ -27,11 +46,13 @@ static int  lax_fd = 0;
 
 int lax_open(void)
 {
-	printf("lax_open");
+	printf("lax_open \n");
 	if(lax_fd) {
 		close(lax_fd);
 	}
 	lax_fd = open(lax_file, O_RDONLY);
+
+	lax_map_rw_buf();
 
 	return lax_fd;
 }
@@ -39,18 +60,14 @@ int lax_open(void)
 
 void lax_close(void)
 {
+	if(rw_buf) {
+		munmap(rw_buf, rw_buf_len);
+		rw_buf = NULL;
+	}
+
 	if(lax_fd) {
 		close(lax_fd);
 	}
-}
-
-void lax_command_vu_2b(long fea)
-{
-	int cmd = ATA_CMD_VU;
-
-	printf("PLEASE DO NOT CALL THIS\n");
-	printf("ioctl simple vu 0x%x 0x%lx \n", cmd, fea);
-	ioctl(lax_fd, cmd, fea);
 }
 
 void lax_command_simple(int cmd, long feature)
@@ -59,53 +76,63 @@ void lax_command_simple(int cmd, long feature)
 	ioctl(lax_fd, cmd, feature);
 }
 
-void lax_command_rext_pio(unsigned long lba, unsigned short block, unsigned char data[])
+unsigned char * lax_cmd_rw(unsigned long lba, unsigned long block, unsigned long flag)
 {
-	int i = 0;
-	unsigned long byte_num = 512 * block;
-	int cmd = ATA_CMD_PIO_READ_EXT;
-        struct lax_io_rext_pio arg;
+	struct lax_rw arg;
+	int retval;
 
-	arg.buf = data;
-	arg.block = block;
 	arg.lba = lba;
+	arg.block = block;
+	arg.flags = flag;
 
-	ioctl(lax_fd, cmd, &arg);
+	printf("rw lba 0x%lx 0x%lx \n",lba, block);
+	retval = ioctl(lax_fd, LAX_CMD_TST_RW, &arg);
+	printf("rw command retval %d, buffer %p \n", retval, rw_buf);
 
-	/*
-	for(i = 0; i < byte_num; i++) {
-		unsigned char *p = (unsigned char*)arg.buf;
-		printf("%2x ", p[i]);
-		if(i%16 == 15){
+	return rw_buf;
+}
+
+unsigned char* lax_cmd_rext_pio(unsigned long lba, unsigned long block)
+{
+	unsigned long flag = 0;
+
+	flag &= (~RW_FLAG_DIRECTION); /* READ */
+	flag &= (~RW_FLAG_XFER_MODE); /* PIO */
+
+	return lax_cmd_rw(lba, block, flag);
+}
+
+static void lax_map_rw_buf(void)
+{
+	unsigned long offset = 0;
+
+	if(rw_buf == NULL) {
+		rw_buf = mmap(0, rw_buf_len, PROT_READ | PROT_EXEC, MAP_FILE | MAP_PRIVATE,
+				lax_fd, offset);
+		if (rw_buf == (void *)-1) {
+			printf("mmap failed\n");
+			exit(1);
+		}
+	}
+}
+
+void lax_dump_rw_buf(unsigned long size)
+{
+	unsigned char *p = rw_buf;
+	unsigned long i;
+
+	if(p == NULL) {
+		printf("not mapped\n");
+		return;
+	}
+
+	for(i=0; i < size; i++) {
+		printf("%.2x ", p[i]);
+		if(i%16 == 15) {
 			printf("\n");
 		}
 	}
-	*/
-}
 
-void lax_tst_mmap(void)
-{
-	unsigned long offset, len;
-	void *addr;
-	unsigned char * p;
-
-	len = ( 32l * 1024l * 1024l ); // 32M
-	offset = 0;
-
-	printf("\n about to map\n");
-	addr = mmap(0, len, PROT_READ | PROT_EXEC, MAP_FILE | MAP_PRIVATE, lax_fd, offset);
-
-	if (addr == (void *)-1) {
-		printf("mmap failed\n");
-		exit(1);
-	}
-
-	p = (unsigned char *)addr;
-	printf("\n mapped data: %d %d %d %d %d \n", p[0], p[1], p[2], p[3], p[4]);
-	p += (4l * 1024l * 1024l);
-	printf("\n mapped data: %d %d %d %d %d \n", p[0], p[1], p[2], p[3], p[4]);
-
-	munmap(addr, len);
 }
 
 
