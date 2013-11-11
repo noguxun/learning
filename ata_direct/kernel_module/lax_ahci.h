@@ -18,9 +18,8 @@ enum {
 	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
 
-
-	RW_FLAG_XFER_MODE       = (1 << 1), /* PIO 0,  DMA 1 */
-	RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_XFER_MODE       = (1 << 1), /* PIO 0,  DMA 1 */
+	LAX_RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
 
 };
 

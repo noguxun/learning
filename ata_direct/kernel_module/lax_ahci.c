@@ -191,69 +191,19 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
-static void ahci_cmd_prep_pio_datain_max_4m(const struct ata_taskfile *tf,
-						unsigned int tag, u32 cmd_opts)
+static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size)
 {
-	void * cmd_tbl;
-	unsigned int n_elem;
-	const u32 cmd_fis_len = 5; /* five dwords */
-	u32 opts;
+	unsigned int n_elem = 0;
 	struct lax_port *port = get_port();
-	u32 *sg_base;
-
-	VPK("datain cmd (max 4M data) prepare \n");
-	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
-
-	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
-
-	n_elem = 0;
-	/*
-	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
-	 */
-	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
-	*(sg_base) = cpu_to_le32(port->sg[0].mem_dma & 0xffffffff);
-	*(sg_base + 1) = cpu_to_le32(port->sg[0].mem_dma >> 16) >> 16;
-	*(sg_base + 2) = 0;
-	*(sg_base + 3) = cpu_to_le32(port->sg[0].length -1);
-	n_elem = 1;
-	mb();
-
-	PK("sg setting %x %x %x %x\n", sg_base[0], sg_base[1], sg_base[2], sg_base[3]);
-
-	/*
-	 * Fill in command slot information.
-	 */
-	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
-	if (tf->flags & ATA_TFLAG_WRITE) {
-		opts |= AHCI_CMD_WRITE;
-	}
-
-	ahci_fill_cmd_slot(port, tag, opts);
-}
-
-static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int tag,
-			u32 cmd_opts, unsigned long size)
-{
 	void * cmd_tbl;
-	unsigned int n_elem;
-	const u32 cmd_fis_len = 5; /* five dwords */
-	u32 opts;
-	struct lax_port *port = get_port();
 	u32 *sg_base;
-	unsigned long len;
 
 	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
 
-	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
-
-	VPK("prepare data of size 0x%lx\n", size);
-
-	/*
-	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
-	 */
-	n_elem = 0;
 	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
 	while(true) {
+		unsigned long len;
+
 		len = LAX_SG_ENTRY_SIZE;
 		if(size < len) {
 			len = size;
@@ -273,6 +223,29 @@ static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int
 		}
 		sg_base += 4;
 	}
+
+	return n_elem;
+}
+
+static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int tag,
+			u32 cmd_opts, unsigned long size)
+{
+	void * cmd_tbl;
+	unsigned int n_elem;
+	const u32 cmd_fis_len = 5; /* five dwords */
+	u32 opts;
+	struct lax_port *port = get_port();
+
+	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
+
+	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
+
+	VPK("prepare data of size 0x%lx\n", size);
+
+	/*
+	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
+	 */
+	n_elem = ahci_fill_sg(tag , size);
 
 	/*
 	 * Fill in command slot information.
@@ -432,23 +405,22 @@ static void ahci_tf_init(struct ata_taskfile *tf)
 	tf->ctl = ATA_DEVCTL_OBS;     // obsolete bit in device control
 }
 
-static void ahci_exec_pio_datain_4m(unsigned int tag, u8 command, u16 feature)
+static void ahci_exec_pio_datain(u8 command, u16 feature, unsigned long block)
 {
+	unsigned int tag = 0;
 	struct ata_taskfile tf;
 	void __iomem * reg_issue = get_port_base() + PORT_CMD_ISSUE;
 	u32 bit_pos = 1 << tag;
 	int i;
 	struct lax_port *port = get_port();
 
-	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n", bit_pos, tag, command, feature);
+	VPK("exec cmd, issue reg 0x%x, tag 0x%x, command 0x%x feature 0x%x, block 0x%lx\n",
+		bit_pos, tag, command, feature, block);
 
 	ahci_tf_init(&tf);
-	ahci_fill_info(command, feature, 0, 1, &tf);
+	ahci_fill_info(command, feature, 0, block, &tf);
 
-	/* test if this works */
-	tf.ctl = 0;
-
-	ahci_cmd_prep_pio_datain_max_4m(&tf, tag, 0);
+	ahci_cmd_prep_pio_datain(&tf, tag, 0, block * LAX_SECTOR_SIZE);
 
 	iowrite32(bit_pos, reg_issue);
 
@@ -481,7 +453,7 @@ static void ahci_exec_rw(unsigned long uarg)
 
 	ahci_tf_init(&tf);
 
-	if((arg.flags & RW_FLAG_XFER_MODE) == 0 && (arg.flags & RW_FLAG_DIRECTION) == 0) {
+	if((arg.flags & LAX_RW_FLAG_XFER_MODE) == 0 && (arg.flags & LAX_RW_FLAG_DIRECTION) == 0) {
 		/* PIO READ */
 		command = ATA_CMD_PIO_READ_EXT;
 		if(arg.block == 0) {
@@ -844,7 +816,7 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ahci_port_reset_hard();
 	}
 	else if(cmd == LAX_CMD_TST_ID) {
-		ahci_exec_pio_datain_4m(0, ATA_CMD_ID_ATA, 0xFF00);
+		ahci_exec_pio_datain(ATA_CMD_ID_ATA, 0xFF00, 1);
 	}
 	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
 		ahci_port_restore_irq_mask();
@@ -873,11 +845,6 @@ int ahci_file_release(struct inode *inode, struct file *filp)
 {
 	struct lax_port *port = get_port();
 	struct page *page;
-	page = virt_to_page((((unsigned char *)port->sg[0].mem) + 0));
-	VPK("release page %p mapcount %d\n", page, page->_mapcount.counter);
-	page = virt_to_page((((unsigned char *)port->sg[0].mem) + 4096));
-	VPK("release page %p mapcount %d\n", page, page->_mapcount.counter);
-
 
 	ahci_port_deinit();
 
