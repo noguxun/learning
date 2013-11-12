@@ -23,8 +23,9 @@ enum {
 	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
 
-	RW_FLAG_XFER_MODE       = (1 << 1), /* DMA 0,  PIO 1 */
-	RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
+	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
+	LAX_RW_FLAG_DIRECTION       = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
 };
 
 struct lax_io_rext_pio {
@@ -92,12 +93,33 @@ unsigned char * lax_cmd_rw(unsigned long lba, unsigned long block, unsigned long
 	return rw_buf;
 }
 
+unsigned char* lax_cmd_rext_dma(unsigned long lba, unsigned long block)
+{
+	unsigned long flag = 0;
+
+	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
+
+	return lax_cmd_rw(lba, block, flag);
+}
+
+unsigned char* lax_cmd_r_ncq(unsigned long lba, unsigned long block)
+{
+	unsigned long flag = 0;
+
+	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
+	flag |= (LAX_RW_FLAG_NCQ);  /* DMA */
+
+	return lax_cmd_rw(lba, block, flag);
+}
+
 unsigned char* lax_cmd_rext_pio(unsigned long lba, unsigned long block)
 {
 	unsigned long flag = 0;
 
-	flag &= (~RW_FLAG_DIRECTION); /* READ */
-	flag &= (~RW_FLAG_XFER_MODE); /* PIO */
+	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
 
 	return lax_cmd_rw(lba, block, flag);
 }
@@ -130,6 +152,9 @@ void lax_dump_rw_buf(unsigned long size)
 		printf("%.2x ", p[i]);
 		if(i%16 == 15) {
 			printf("\n");
+		}
+		if(i%512 == 511) {
+			printf("------------\n");
 		}
 	}
 

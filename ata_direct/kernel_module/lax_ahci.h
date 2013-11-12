@@ -18,8 +18,9 @@ enum {
 	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
 
-	LAX_RW_FLAG_XFER_MODE       = (1 << 1), /* PIO 0,  DMA 1 */
-	LAX_RW_FLAG_DIRECTION       = (1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
+	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
+	LAX_RW_FLAG_DIRECTION       = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
 
 };
 
@@ -145,6 +146,21 @@ enum {
 #define LAX_SG_COUNT          (8l)    /* 32M/4M */
 #define LAX_SG_ALL_SIZE       ((LAX_SG_COUNT) * (LAX_SG_ENTRY_SIZE))
 #define LAX_SECTOR_SIZE       (512l)
+#define P(port)               ((lax.ports[lax.port_index].ioport_base) + (port))
+
+#define port_reg_print(reg) \
+{\
+	u32 value;\
+	value = ioread32(P(reg));\
+	PK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
+}
+
+#define hba_reg_print(reg) \
+{\
+	u32 value;\
+	value = ioread32(lax.iohba_base + reg);\
+	PK("%18s: offset 0x%.2x, value %.8X\n",#reg, (reg), value);\
+}
 
 struct ahci_cmd_hdr {
 	__le32			opts;
@@ -190,5 +206,16 @@ struct lax_ahci {
 	int port_index;
 	bool port_initialized;
 };
+
+union u32_b {
+	u32  data;
+	u8   b[4];
+};
+
+union u16_b {
+	u16 data;
+	u8   b[4];
+};
+
 
 #endif
