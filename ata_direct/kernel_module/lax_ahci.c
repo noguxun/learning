@@ -62,6 +62,28 @@ static void p_regs(void)
 	port_reg_print(PORT_DEVSLP);
 }
 
+void lax_rwbuf_dump_sg0(unsigned long size)
+{
+	struct lax_port *port = get_port();
+	unsigned char *p = port->sg[0].mem;
+	unsigned long i;
+
+	if(p == NULL) {
+		VPK("not mapped\n");
+		return;
+	}
+
+	for(i=0; i < size; i++) {
+		VPK("%.2x ", p[i]);
+		if(i%16 == 15) {
+			VPK("\n");
+		}
+		if(i%512 == 511) {
+			VPK("------------\n");
+		}
+	}
+}
+
 static u32 ahci_port_set_irq(u32 irq_mask)
 {
 	u32 org_irq_mask;
@@ -154,18 +176,7 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
 
 	n_elem = 0;
-	/*
-	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
-	 */
-
-	/*
-	 * Fill in command slot information.
-	 */
 	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
-	//TODO: remove this
-	//if (tf->flags & ATA_TFLAG_WRITE) {
-	//	opts |= AHCI_CMD_WRITE;
-	//}
 
 	ahci_fill_cmd_slot(port, tag, opts);
 }
@@ -206,8 +217,8 @@ static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size)
 	return n_elem;
 }
 
-static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int tag,
-			u32 cmd_opts, unsigned long size)
+static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
+				u32 cmd_opts, unsigned long size)
 {
 	void * cmd_tbl;
 	unsigned int n_elem;
@@ -230,10 +241,6 @@ static void ahci_cmd_prep_pio_datain(const struct ata_taskfile *tf, unsigned int
 	 * Fill in command slot information.
 	 */
 	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
-	//TODO: remove this
-	//if (tf->flags & ATA_TFLAG_WRITE) {
-	//	opts |= AHCI_CMD_WRITE;
-	//}
 
 	ahci_fill_cmd_slot(port, tag, opts);
 }
@@ -387,8 +394,6 @@ static void ahci_port_enable_fis_recv(void)
 	ioread32(P(PORT_CMD));
 }
 
-
-
 static void ahci_tf_init(struct ata_taskfile *tf)
 {
 	memset(tf, 0, sizeof(*tf));
@@ -397,7 +402,50 @@ static void ahci_tf_init(struct ata_taskfile *tf)
 	tf->ctl = ATA_DEVCTL_OBS;     // obsolete bit in device control
 }
 
-static void ahci_exec_pio_datain(u8 command, u16 feature, unsigned long block)
+static u32 ahci_get_ata_command(unsigned long flags, u32 *pOpt)
+{
+	u32 cmd = 0;
+
+	if((flags & LAX_RW_FLAG_NCQ) == 0) {
+		if((flags & LAX_RW_FLAG_RW) == 0) {
+			if((flags & LAX_RW_FLAG_XFER_MODE) == 0) {
+				cmd = ATA_CMD_PIO_READ_EXT;
+			}
+			else{
+				cmd = ATA_CMD_READ_EXT;
+			}
+			goto END;
+		}
+		else {
+			if((flags & LAX_RW_FLAG_XFER_MODE) == 0) {
+				cmd = ATA_CMD_PIO_WRITE_EXT;
+				*pOpt |= AHCI_CMD_WRITE;
+			}
+			else{
+				cmd = ATA_CMD_WRITE_EXT;
+				*pOpt |= AHCI_CMD_WRITE;
+			}
+
+			goto END;
+		}
+	}
+	else {
+		if((flags & LAX_RW_FLAG_RW) == 0) {
+			cmd = ATA_CMD_FPDMA_READ;
+		}
+		else {
+			cmd = ATA_CMD_FPDMA_WRITE;
+			*pOpt |= AHCI_CMD_WRITE;
+		}
+		goto END;
+	}
+
+END:
+	return cmd;
+
+}
+
+static void ahci_exec_cmd_pio_datain(u8 command, u16 feature, unsigned long block)
 {
 	unsigned int tag = 0;
 	struct ata_taskfile tf;
@@ -409,7 +457,7 @@ static void ahci_exec_pio_datain(u8 command, u16 feature, unsigned long block)
 	ahci_tf_init(&tf);
 	ahci_fill_taskfile(command, feature, 0, block, &tf);
 
-	ahci_cmd_prep_pio_datain(&tf, tag, 0, block * LAX_SECTOR_SIZE);
+	ahci_cmd_prep_rw(&tf, tag, 0, block * LAX_SECTOR_SIZE);
 
 	/* issue command */
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
@@ -421,49 +469,12 @@ static void ahci_exec_pio_datain(u8 command, u16 feature, unsigned long block)
 	}
 
 	ahci_port_clear_irq();
+	ahci_port_clear_sata_err();
 }
 
-static u32 ahci_get_ata_command(unsigned long flags)
-{
-	u32 cmd = 0;
 
-	if((flags & LAX_RW_FLAG_NCQ) == 0) {
-		if((flags & LAX_RW_FLAG_DIRECTION) == 0) {
-			if((flags & LAX_RW_FLAG_XFER_MODE) == 0) {
-				cmd = ATA_CMD_PIO_READ_EXT;
-			}
-			else{
-				cmd = ATA_CMD_READ_EXT;
-			}
-			goto END;
-		}
-		else {
-			if((flags & LAX_RW_FLAG_XFER_MODE) == 0) {
-				//cmd = ATA_CMD_PIO_WRITE_EXT; not impl yet
-			}
-			else{
-				//cmd = ATA_CMD_WRITE_EXT; not impl yet
-			}
 
-			goto END;
-		}
-	}
-	else {
-		if((flags & LAX_RW_FLAG_DIRECTION) == 0) {
-			cmd = ATA_CMD_FPDMA_READ;
-		}
-		else {
-			// cmd = ATA_CMD_FPDMA_WRITE; not impl yet
-		}
-		goto END;
-	}
-
-END:
-	return cmd;
-
-}
-
-static void ahci_exec_rw(unsigned long uarg)
+static void ahci_exec_cmd_rw(unsigned long uarg)
 {
 	unsigned int tag = 0;
 	struct lax_rw arg;
@@ -477,13 +488,14 @@ static void ahci_exec_rw(unsigned long uarg)
 	/* prepare data */
 	ahci_tf_init(&tf);
 
-	command = ahci_get_ata_command(arg.flags);
+	command = ahci_get_ata_command(arg.flags, &cmdopts);
 	if(command == 0 ) {
 		PK("not supportted command \n");
 		goto END;
 	}
 
 	VPK("exec rw command 0x%x", command);
+        lax_rwbuf_dump_sg0(arg.block * 512);
 
 	if(arg.block == 0) {
 		arg.block = 0x10000;
@@ -495,7 +507,7 @@ static void ahci_exec_rw(unsigned long uarg)
 	else{
 		ahci_fill_taskfile_ncq(command, 0x00, arg.lba, arg.block, &tf);
 	}
-	ahci_cmd_prep_pio_datain(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE);
+	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE);
 
 	/* issue command */
 	if((arg.flags & LAX_RW_FLAG_NCQ) != 0) {
@@ -514,6 +526,7 @@ static void ahci_exec_rw(unsigned long uarg)
 
 	}
 	ahci_port_clear_irq();
+	ahci_port_clear_sata_err();
 
 END:
 	return;
@@ -538,7 +551,8 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 		printk(KERN_ERR "timeout exec command 0x%x\n", command);
 	}
 
-	p_regs();
+	ahci_port_clear_irq();
+	ahci_port_clear_sata_err();
 }
 
 static bool ahci_port_engine_stop(void)
@@ -779,6 +793,7 @@ static void ahci_port_reset_hard(void)
 static void ahci_port_init(void)
 {
 	u32 tmp;
+	u32 flags;
 	struct lax_port *port = get_port();
 
 	if(lax.port_initialized == true) {
@@ -800,7 +815,8 @@ static void ahci_port_init(void)
 
 	/* Verify everything is clean */
 	tmp = ioread32(P(PORT_CMD));
-	if ((tmp & (PORT_CMD_START | PORT_CMD_LIST_ON | PORT_CMD_FIS_RX | PORT_CMD_FIS_ON)) != 0) {
+	flags = PORT_CMD_START | PORT_CMD_LIST_ON | PORT_CMD_FIS_RX | PORT_CMD_FIS_ON;
+	if ((tmp & flags) != 0) {
 		VPK("failed state\n");
 		return;
 	}
@@ -852,13 +868,13 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ahci_port_reset_hard();
 	}
 	else if(cmd == LAX_CMD_TST_ID) {
-		ahci_exec_pio_datain(ATA_CMD_ID_ATA, 0xFF00, 1);
+		ahci_exec_cmd_pio_datain(ATA_CMD_ID_ATA, 0xFF00, 1);
 	}
 	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
 		ahci_port_restore_irq_mask();
 	}
 	else if(cmd == LAX_CMD_TST_RW) {
-		ahci_exec_rw(arg);
+		ahci_exec_cmd_rw(arg);
 	}
 	else {
 		printk(KERN_WARNING "not supported command 0x%x ", cmd);
@@ -961,7 +977,7 @@ static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	page = virt_to_page(p);
 
-	VPK("nopage sg%d: offset %d page %p mapcount %d\n", sg_index, sg_entry_offset, page, page->_mapcount.counter);
+	VPK("nopage sg%d: offset %d page %p\n", sg_index, sg_entry_offset, page);
 
 	get_page(page);
 	vmf->page = page;

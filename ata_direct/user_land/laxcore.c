@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/mman.h>
@@ -8,10 +9,12 @@
 #include <errno.h>
 #include <limits.h>
 
-static unsigned char * rw_buf = NULL;
-static unsigned long  rw_buf_len = ( 32l * 1024l * 1024l );
+static unsigned char *rwbuf = NULL;
+static unsigned long rwbuf_len = ( 32l * 1024l * 1024l );
+static unsigned char rwbuf_pat = 0xFF;
 
-static void lax_map_rw_buf(void);
+static void lax_rwbuf_map(void);
+static void lax_rwbuf_set_patid(unsigned long lba, unsigned long block, unsigned char pat);
 
 enum {
 	LAX_CMD_TST_START = 0x101,
@@ -25,7 +28,9 @@ enum {
 
 	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
 	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
-	LAX_RW_FLAG_DIRECTION       = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_RW              = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
+
+	LAX_SECTOR_SIZE             = 512,
 };
 
 struct lax_io_rext_pio {
@@ -51,9 +56,13 @@ int lax_open(void)
 	if(lax_fd) {
 		close(lax_fd);
 	}
-	lax_fd = open(lax_file, O_RDONLY);
+	lax_fd = open(lax_file, O_RDWR);
+	if(lax_fd == 0) {
+		printf("open failed \n");
+		exit(1);
+	}
 
-	lax_map_rw_buf();
+	lax_rwbuf_map();
 
 	return lax_fd;
 }
@@ -61,9 +70,9 @@ int lax_open(void)
 
 void lax_close(void)
 {
-	if(rw_buf) {
-		munmap(rw_buf, rw_buf_len);
-		rw_buf = NULL;
+	if(rwbuf) {
+		munmap(rwbuf, rwbuf_len);
+		rwbuf = NULL;
 	}
 
 	if(lax_fd) {
@@ -88,18 +97,29 @@ unsigned char * lax_cmd_rw(unsigned long lba, unsigned long block, unsigned long
 
 	printf("rw lba 0x%lx 0x%lx \n",lba, block);
 	retval = ioctl(lax_fd, LAX_CMD_TST_RW, &arg);
-	printf("rw command retval %d, buffer %p \n", retval, rw_buf);
+	printf("rw command retval %d, buffer %p \n", retval, rwbuf);
 
-	return rw_buf;
+	return rwbuf;
 }
 
 unsigned char* lax_cmd_rext_dma(unsigned long lba, unsigned long block)
 {
 	unsigned long flag = 0;
 
-	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
 
+	return lax_cmd_rw(lba, block, flag);
+}
+
+unsigned char* lax_cmd_wext_dma(unsigned long lba, unsigned long block)
+{
+	unsigned long flag = 0;
+
+	flag |= (LAX_RW_FLAG_RW); /* WRITE */
+	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
+
+	lax_rwbuf_set_patid(lba, block, rwbuf_pat);
 	return lax_cmd_rw(lba, block, flag);
 }
 
@@ -107,10 +127,24 @@ unsigned char* lax_cmd_r_ncq(unsigned long lba, unsigned long block)
 {
 	unsigned long flag = 0;
 
-	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
-	flag |= (LAX_RW_FLAG_NCQ);  /* DMA */
+	flag |= (LAX_RW_FLAG_NCQ);  /* NCQ */
 
+	lax_rwbuf_set_patid(lba, block, rwbuf_pat);
+	return lax_cmd_rw(lba, block, flag);
+}
+
+
+unsigned char* lax_cmd_w_ncq(unsigned long lba, unsigned long block)
+{
+	unsigned long flag = 0;
+
+	flag |= (LAX_RW_FLAG_RW); /* WRITE */
+	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
+	flag |= (LAX_RW_FLAG_NCQ);  /* NCQ */
+
+	lax_rwbuf_set_patid(lba, block, rwbuf_pat);
 	return lax_cmd_rw(lba, block, flag);
 }
 
@@ -118,29 +152,57 @@ unsigned char* lax_cmd_rext_pio(unsigned long lba, unsigned long block)
 {
 	unsigned long flag = 0;
 
-	flag &= (~LAX_RW_FLAG_DIRECTION); /* READ */
+	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
 
 	return lax_cmd_rw(lba, block, flag);
 }
 
-static void lax_map_rw_buf(void)
+unsigned char* lax_cmd_wext_pio(unsigned long lba, unsigned long block)
 {
-	unsigned long offset = 0;
+	unsigned long flag = 0;
 
-	if(rw_buf == NULL) {
-		rw_buf = mmap(0, rw_buf_len, PROT_READ | PROT_EXEC, MAP_FILE | MAP_PRIVATE,
-				lax_fd, offset);
-		if (rw_buf == (void *)-1) {
-			printf("mmap failed\n");
-			exit(1);
-		}
+	flag |= (LAX_RW_FLAG_RW); /* WRITE */
+	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
+
+	lax_rwbuf_set_patid(lba, block, rwbuf_pat);
+	return lax_cmd_rw(lba, block, flag);
+}
+
+void lax_rwbuf_set_patid(unsigned long lba, unsigned long block, unsigned char pat)
+{
+	unsigned long i;
+
+	// set pattern
+	memset(rwbuf, pat, block * LAX_SECTOR_SIZE);
+
+	// set id
+	for(i=0; i < block; i++) {
+		unsigned long *p;
+		p = (unsigned long *)((unsigned char *)rwbuf + (i * LAX_SECTOR_SIZE));
+		*p = lba + i;
 	}
 }
 
-void lax_dump_rw_buf(unsigned long size)
+void lax_rwbuf_map(void)
 {
-	unsigned char *p = rw_buf;
+	unsigned long offset = 0;
+
+	if(rwbuf != NULL) {
+		return;
+	}
+
+	printf("mmap kernel buffer\n");
+	rwbuf = mmap(0, rwbuf_len, PROT_WRITE | PROT_READ, MAP_SHARED, lax_fd, offset);
+	if (rwbuf == (void *)-1) {
+		printf("mmap failed\n");
+		exit(1);
+	}
+}
+
+void lax_rwbuf_dump(unsigned long size)
+{
+	unsigned char *p = rwbuf;
 	unsigned long i;
 
 	if(p == NULL) {
@@ -157,7 +219,6 @@ void lax_dump_rw_buf(unsigned long size)
 			printf("------------\n");
 		}
 	}
-
 }
 
 

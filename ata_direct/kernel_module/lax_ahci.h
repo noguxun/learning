@@ -20,7 +20,7 @@ enum {
 
 	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
 	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
-	LAX_RW_FLAG_DIRECTION       = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_RW              = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
 
 };
 
