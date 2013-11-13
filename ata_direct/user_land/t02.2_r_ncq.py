@@ -22,7 +22,7 @@ lib.lax_command_simple(c_int(LAX_CMD_TST_PRINT_REGS), c_long(0))
 
 
 print("\noutput contents\n");
-lib.lax_rwbuf_dump(c_long(block * 512));
+lib.lax_rbuf_dump(c_long(block * 512));
 print("\nend of data\n");
 
 lib.lax_close()

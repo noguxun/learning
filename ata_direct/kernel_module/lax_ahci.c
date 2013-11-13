@@ -93,6 +93,14 @@ static void ahci_port_clear_irq(void)
 	}
 }
 
+static void ahci_tf_init(struct ata_taskfile *tf)
+{
+	memset(tf, 0, sizeof(*tf));
+
+	tf->device = ATA_DEVICE_OBS;
+	tf->ctl = ATA_DEVCTL_OBS;     // obsolete bit in device control
+}
+
 static void ahci_tf_to_fis(const struct ata_taskfile *tf, u8 pmp, int is_cmd, u8 *fis)
 {
 	fis[0] = 0x27;			/* Register - Host to Device FIS */
@@ -138,6 +146,95 @@ static void ahci_fill_cmd_slot(struct lax_port *port,unsigned int tag, u32 opts)
 	VPK("fill cmd slot tag %d, opts 0x%x\n", tag, opts );
 }
 
+static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size, unsigned int direction)
+{
+	unsigned int n_elem = 0;
+	struct lax_port *port = get_port();
+	void * cmd_tbl;
+	u32 *sg_base;
+
+	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
+
+	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
+	while(true) {
+		unsigned long len;
+
+		len = LAX_SG_ENTRY_SIZE;
+		if(size < len) {
+			len = size;
+		}
+
+		*(sg_base) = cpu_to_le32(port->sg[direction][n_elem].mem_dma & 0xffffffff);
+		*(sg_base + 1) = cpu_to_le32(port->sg[direction][n_elem].mem_dma >> 16) >> 16;
+		*(sg_base + 2) = 0;
+		*(sg_base + 3) = cpu_to_le32(len -1);
+
+		VPK("sg set sg%d, len 0x%x, size 0x%lx \n", n_elem, *(sg_base + 3), size);
+
+		size -= len;
+		n_elem ++;
+		if(size == 0 ) {
+			break;
+		}
+		sg_base += 4;
+	}
+
+	return n_elem;
+}
+
+static void ahci_fill_tf_ncq(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
+{
+	unsigned int tag = 0;
+	union u32_b u32_data;
+	union u16_b u16_data;
+
+	tf->command = cmd;
+
+	u32_data.data = lba;
+	tf->hob_lbah = 0;
+	tf->hob_lbam = 0;
+	tf->hob_lbal = u32_data.b[3];
+	tf->lbah = u32_data.b[2];
+	tf->lbam = u32_data.b[1];
+	tf->lbal = u32_data.b[0];
+
+	tf->nsect = tag << 3;
+
+	u16_data.data = block;
+	tf->hob_feature = u16_data.b[1];
+	tf->feature = u16_data.b[0];
+
+	tf->device = ATA_LBA;
+}
+
+static void ahci_fill_tf(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
+{
+	union u32_b u32_data;
+	union u16_b u16_data;
+
+	tf->command = cmd;
+
+	u32_data.data = lba;
+	tf->hob_lbah = 0;
+	tf->hob_lbam = 0;
+	tf->hob_lbal = u32_data.b[3];
+	tf->lbah = u32_data.b[2];
+	tf->lbam = u32_data.b[1];
+	tf->lbal = u32_data.b[0];
+
+	u16_data.data = block;
+	tf->hob_nsect = u16_data.b[1];
+	tf->nsect = u16_data.b[0];
+
+	u16_data.data = feature;
+	tf->hob_feature = u16_data.b[1];
+	tf->feature = u16_data.b[0];
+
+	tf->device = 0xa0 | 0x40; /* using lba, copied code from hparm*/
+}
+
+
+
 static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag, u32 cmd_opts)
 {
 	void * cmd_tbl;
@@ -157,44 +254,8 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
-static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size)
-{
-	unsigned int n_elem = 0;
-	struct lax_port *port = get_port();
-	void * cmd_tbl;
-	u32 *sg_base;
-
-	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
-
-	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
-	while(true) {
-		unsigned long len;
-
-		len = LAX_SG_ENTRY_SIZE;
-		if(size < len) {
-			len = size;
-		}
-
-		*(sg_base) = cpu_to_le32(port->sg[n_elem].mem_dma & 0xffffffff);
-		*(sg_base + 1) = cpu_to_le32(port->sg[n_elem].mem_dma >> 16) >> 16;
-		*(sg_base + 2) = 0;
-		*(sg_base + 3) = cpu_to_le32(len -1);
-
-		VPK("sg set sg%d, len 0x%x, size 0x%lx \n", n_elem, *(sg_base + 3), size);
-
-		size -= len;
-		n_elem ++;
-		if(size == 0 ) {
-			break;
-		}
-		sg_base += 4;
-	}
-
-	return n_elem;
-}
-
 static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
-				u32 cmd_opts, unsigned long size)
+				u32 cmd_opts, unsigned long size, unsigned int direction)
 {
 	void * cmd_tbl;
 	unsigned int n_elem;
@@ -208,16 +269,9 @@ static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
 
 	VPK("prepare data of size 0x%lx\n", size);
 
-	/*
-	 * scatter list, n_elem = ahci_fill_sg() 4.2.3, offset 0x80
-	 */
-	n_elem = ahci_fill_sg(tag , size);
+	n_elem = ahci_fill_sg(tag , size, direction);
 
-	/*
-	 * Fill in command slot information.
-	 */
 	opts = cmd_fis_len | n_elem << 16 | (0 << 12) | cmd_opts;
-
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
@@ -264,58 +318,6 @@ static bool ahci_busy_wait_not(u32 wait_msec, void __iomem *reg, u32 mask, u32 v
 	else {
 		return true;
 	}
-}
-
-
-static void ahci_fill_taskfile_ncq(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
-{
-	unsigned int tag = 0;
-	union u32_b u32_data;
-	union u16_b u16_data;
-
-	tf->command = cmd;
-
-	u32_data.data = lba;
-	tf->hob_lbah = 0;
-	tf->hob_lbam = 0;
-	tf->hob_lbal = u32_data.b[3];
-	tf->lbah = u32_data.b[2];
-	tf->lbam = u32_data.b[1];
-	tf->lbal = u32_data.b[0];
-
-	tf->nsect = tag << 3;
-
-	u16_data.data = block;
-	tf->hob_feature = u16_data.b[1];
-	tf->feature = u16_data.b[0];
-
-	tf->device = ATA_LBA;
-}
-
-static void ahci_fill_taskfile(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
-{
-	union u32_b u32_data;
-	union u16_b u16_data;
-
-	tf->command = cmd;
-
-	u32_data.data = lba;
-	tf->hob_lbah = 0;
-	tf->hob_lbam = 0;
-	tf->hob_lbal = u32_data.b[3];
-	tf->lbah = u32_data.b[2];
-	tf->lbam = u32_data.b[1];
-	tf->lbal = u32_data.b[0];
-
-	u16_data.data = block;
-	tf->hob_nsect = u16_data.b[1];
-	tf->nsect = u16_data.b[0];
-
-	u16_data.data = feature;
-	tf->hob_feature = u16_data.b[1];
-	tf->feature = u16_data.b[0];
-
-	tf->device = 0xa0 | 0x40; /* using lba, copied code from hparm*/
 }
 
 static bool ahci_port_disable_fis_recv(void)
@@ -370,13 +372,7 @@ static void ahci_port_enable_fis_recv(void)
 	ioread32(P(PORT_CMD));
 }
 
-static void ahci_tf_init(struct ata_taskfile *tf)
-{
-	memset(tf, 0, sizeof(*tf));
 
-	tf->device = ATA_DEVICE_OBS;
-	tf->ctl = ATA_DEVCTL_OBS;     // obsolete bit in device control
-}
 
 static u32 ahci_get_ata_command(unsigned long flags, u32 *pOpt)
 {
@@ -395,11 +391,9 @@ static u32 ahci_get_ata_command(unsigned long flags, u32 *pOpt)
 		else {
 			if((flags & LAX_RW_FLAG_XFER_MODE) == 0) {
 				cmd = ATA_CMD_PIO_WRITE_EXT;
-				*pOpt |= AHCI_CMD_WRITE;
 			}
 			else{
 				cmd = ATA_CMD_WRITE_EXT;
-				*pOpt |= AHCI_CMD_WRITE;
 			}
 
 			goto END;
@@ -411,12 +405,14 @@ static u32 ahci_get_ata_command(unsigned long flags, u32 *pOpt)
 		}
 		else {
 			cmd = ATA_CMD_FPDMA_WRITE;
-			*pOpt |= AHCI_CMD_WRITE;
 		}
 		goto END;
 	}
 
 END:
+	if(pOpt && (flags & LAX_RW_FLAG_RW) != 0) {
+		*pOpt |= AHCI_CMD_WRITE;
+	}
 	return cmd;
 
 }
@@ -431,9 +427,9 @@ static void ahci_exec_cmd_pio_datain(u8 command, u16 feature, unsigned long bloc
 		bit_pos, tag, command, feature, block);
 
 	ahci_tf_init(&tf);
-	ahci_fill_taskfile(command, feature, 0, block, &tf);
+	ahci_fill_tf(command, feature, 0, block, &tf);
 
-	ahci_cmd_prep_rw(&tf, tag, 0, block * LAX_SECTOR_SIZE);
+	ahci_cmd_prep_rw(&tf, tag, 0, block * LAX_SECTOR_SIZE, 0);
 
 	/* issue command */
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
@@ -456,6 +452,7 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	u32 bit_pos = 1 << tag;
 	u32 cmdopts = 0;
 	u8 command;
+	unsigned int direction;
 
 	copy_from_user(&arg, (void *)uarg, sizeof(struct lax_rw));
 
@@ -475,12 +472,14 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	}
 
 	if((arg.flags & LAX_RW_FLAG_NCQ) == 0) {
-		ahci_fill_taskfile(command, 0x00, arg.lba, arg.block, &tf);
+		ahci_fill_tf(command, 0x00, arg.lba, arg.block, &tf);
 	}
 	else{
-		ahci_fill_taskfile_ncq(command, 0x00, arg.lba, arg.block, &tf);
+		ahci_fill_tf_ncq(command, 0x00, arg.lba, arg.block, &tf);
 	}
-	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE);
+
+	direction = ((arg.flags & LAX_RW_FLAG_RW) == 0)? LAX_READ : LAX_WRITE;
+	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE, direction);
 
 	/* issue command */
 	if((arg.flags & LAX_RW_FLAG_NCQ) != 0) {
@@ -514,7 +513,7 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 		bit_pos, tag, command, feature);
 
 	ahci_tf_init(&tf);
-	ahci_fill_taskfile(command, feature, 0, 0, &tf);
+	ahci_fill_tf(command, feature, 0, 0, &tf);
 
 	ahci_cmd_prep_nodata(&tf, tag, AHCI_CMD_CLR_BUSY);
 
@@ -620,12 +619,26 @@ static int ahci_port_sg_alloc(void)
 			return -ENOMEM;
 		}
 
-		port->sg[i].mem = mem;
-		port->sg[i].mem_dma = mem_dma;
-		port->sg[i].length = LAX_SG_ENTRY_SIZE;
-		VPK("allocated dma memory for sg\n");
+		port->sg[0][i].mem = mem;
+		port->sg[0][i].mem_dma = mem_dma;
+		port->sg[0][i].length = LAX_SG_ENTRY_SIZE;
+		VPK("allocated dma memory for sg read\n");
 	}
 
+	for(i = 0; i < LAX_SG_COUNT; i++) {
+		/* __GFP_COMP is needed for parts to be mapped */
+		mem = dma_zalloc_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
+						&mem_dma, GFP_KERNEL | __GFP_COMP );
+		if(!mem) {
+			PK("memory allocation failed\n");
+			return -ENOMEM;
+		}
+
+		port->sg[1][i].mem = mem;
+		port->sg[1][i].mem_dma = mem_dma;
+		port->sg[1][i].length = LAX_SG_ENTRY_SIZE;
+		VPK("allocated dma memory for sg write\n");
+	}
 	return 0;
 }
 
@@ -637,7 +650,7 @@ static void ahci_port_sg_free(void)
 	VPK("free port sg mem \n");
 	for(i = 0; i < LAX_SG_COUNT; i++) {
 		dma_free_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
-				port->sg[i].mem, port->sg[i].mem_dma);
+				port->sg[0][i].mem, port->sg[0][i].mem_dma);
 	}
 }
 
@@ -933,24 +946,34 @@ static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
 	int sg_entry_offset;
 	unsigned char *p;
 	struct page *page;
+	unsigned int direction;
 
 	offset_in_file = (unsigned long)(vmf->virtual_address - vma->vm_start) +
 				(vma->vm_pgoff << PAGE_SHIFT);
-	if(offset_in_file >= LAX_SG_ALL_SIZE) {
+
+	if(offset_in_file >= (LAX_SG_ALL_SIZE * 2)) {
 		goto out;
+	}
+
+	if(offset_in_file >= LAX_SG_ALL_SIZE) {
+		direction = LAX_WRITE;
+		offset_in_file -= LAX_SG_ALL_SIZE; /* skip the read offset */
+	}
+	else {
+		direction = LAX_READ;
 	}
 
 	sg_index = offset_in_file / LAX_SG_ENTRY_SIZE;
 	sg_entry_offset = offset_in_file % LAX_SG_ENTRY_SIZE;
 
-	p = (((unsigned char *)port->sg[sg_index].mem) + sg_entry_offset);
+	p = (((unsigned char *)port->sg[direction][sg_index].mem) + sg_entry_offset);
 	if(!p) {
 		goto out;
 	}
 
 	page = virt_to_page(p);
 
-	VPK("nopage sg%d: offset %d page %p\n", sg_index, sg_entry_offset, page);
+	VPK("nopage sg[%d][%d]: offset %d page %p\n", direction, sg_index, sg_entry_offset, page);
 
 	get_page(page);
 	vmf->page = page;

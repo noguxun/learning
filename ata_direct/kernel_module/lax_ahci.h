@@ -22,6 +22,9 @@ enum {
 	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
 	LAX_RW_FLAG_RW              = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
 
+	LAX_READ                    = 0,
+	LAX_WRITE                   = 1,
+
 };
 
 enum {
@@ -196,7 +199,7 @@ struct lax_port {
 	void *cmd_tbl;
 	dma_addr_t cmd_tbl_dma;
 
-	struct lax_sg sg[LAX_SG_COUNT];
+	struct lax_sg sg[2][LAX_SG_COUNT];
 };
 
 struct lax_ahci {
