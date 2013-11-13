@@ -14,8 +14,6 @@
 #include "lax_ahci.h"
 
 
-
-
 /*
  * only the port is configurable
  * the first the controller will be used
@@ -60,28 +58,6 @@ static void p_regs(void)
 	port_reg_print(PORT_SCR_NTF);
 	port_reg_print(PORT_FBS);
 	port_reg_print(PORT_DEVSLP);
-}
-
-void lax_rwbuf_dump_sg0(unsigned long size)
-{
-	struct lax_port *port = get_port();
-	unsigned char *p = port->sg[0].mem;
-	unsigned long i;
-
-	if(p == NULL) {
-		VPK("not mapped\n");
-		return;
-	}
-
-	for(i=0; i < size; i++) {
-		VPK("%.2x ", p[i]);
-		if(i%16 == 15) {
-			VPK("\n");
-		}
-		if(i%512 == 511) {
-			VPK("------------\n");
-		}
-	}
 }
 
 static u32 ahci_port_set_irq(u32 irq_mask)
@@ -472,8 +448,6 @@ static void ahci_exec_cmd_pio_datain(u8 command, u16 feature, unsigned long bloc
 	ahci_port_clear_sata_err();
 }
 
-
-
 static void ahci_exec_cmd_rw(unsigned long uarg)
 {
 	unsigned int tag = 0;
@@ -495,7 +469,6 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	}
 
 	VPK("exec rw command 0x%x", command);
-        lax_rwbuf_dump_sg0(arg.block * 512);
 
 	if(arg.block == 0) {
 		arg.block = 0x10000;
@@ -881,7 +854,7 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		retval = -EPERM;
 	}
 
-	return 0;
+	return retval;
 }
 
 

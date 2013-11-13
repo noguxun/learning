@@ -17,18 +17,7 @@ buf_size = block * 512
 
 lib.lax_cmd_rext_pio.restype = POINTER(c_ubyte * (block * 512))
 
-buf = lib.lax_cmd_rext_dma(c_long(lba), c_long(block))
-
-lib.lax_command_simple(c_int(LAX_CMD_TST_PRINT_REGS), c_long(0))
-
-
-print("\noutput contents\n");
-#for i in buf.contents:
-#    output = "{0:2x} ".format(i);
-#    print(output, end="")
-lib.lax_rwbuf_dump(c_long(block * 512));
-
-print("\nend of data\n");
+buf = lib.lax_cmd_wext_dma(c_long(lba), c_long(block))
 
 lib.lax_close()
 

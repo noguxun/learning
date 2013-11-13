@@ -9,21 +9,13 @@ lib = cdll.LoadLibrary('./liblaxcore.so')
 lib.lax_open()
 
 # Send out a PIO read ext command
-block = ( 0x2 )
-lba = 0x100
+block = ( 0x100 )
+lba = 0x2
 buf_size = block * 512
-
 
 lib.lax_cmd_rext_pio.restype = POINTER(c_ubyte * (block * 512))
 
-buf = lib.lax_cmd_r_ncq(c_long(lba), c_long(block))
-
-lib.lax_command_simple(c_int(LAX_CMD_TST_PRINT_REGS), c_long(0))
-
-
-print("\noutput contents\n");
-lib.lax_rwbuf_dump(c_long(block * 512));
-print("\nend of data\n");
+buf = lib.lax_cmd_w_ncq(c_long(lba), c_long(block))
 
 lib.lax_close()
 
