@@ -18,15 +18,21 @@ print(some_int)
 
 lib.GetString.restype = c_char_p
 binary_string = lib.GetString()
-print(binary_string)
+#print(binary_string)
 print(binary_string.decode('utf-8'))
 
-arry_size =  64 * 1024 * 512
+arry_size =  10
 data_arry = (c_int * arry_size)()
 lib.GetArrayData(arry_size, data_arry)
-for index in range(arry_size):
-	if (index % 100 == 0):
-		print(data_arry[index]) 
+#for index in range(arry_size):
+#    print(data_arry[index])
+
+
+lib.GetBytes.restype = POINTER(c_ubyte)
+length = c_int();
+data_arry = lib.GetBytes(byref(length))
+for index in range(length.value):
+    print(data_arry[index])
 
 
 

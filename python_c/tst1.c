@@ -1,13 +1,16 @@
 #include "stdio.h"
 
+#define TST_DATA_LEN 10
+unsigned char test_data[TST_DATA_LEN] = {0,1,2,3,4,5,6,7,8,9};
+
 void PrintHello(void)
 {
-    printf("Hello, Matrix \n");	
+    printf("Hello, Matrix \n");
 }
 
 void PrintMyWord(char *p)
 {
-    printf("%s \n", p);	
+    printf("%s \n", p);
 }
 
 
@@ -24,6 +27,14 @@ int GetInt2(int input1, int input2)
 char* GetString(void)
 {
 	return "Dont buy shit we dont need";
+}
+
+unsigned char * GetBytes(int *pLen)
+{
+	if(pLen) {
+		*pLen = TST_DATA_LEN;
+	}
+	return test_data;
 }
 
 void GetArrayData(int size, int data[])
