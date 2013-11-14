@@ -21,6 +21,9 @@
  * TODO: currently, lba is a 32 bit variable, needs to make it 48 bit
  */
 
+static void ahci_port_init(void);
+static void ahci_port_deinit(void);
+
 static struct lax_ahci lax = { NULL, NULL };
 
 static struct lax_port *get_port(void)
@@ -719,6 +722,8 @@ static void ahci_port_reset_hard(void)
 	u32 tmp;
 	int tries = ATA_LINK_RESUME_TRIES;
 
+	ahci_port_deinit();
+
 	/* setting HBA to idle */
 	tmp = ioread32(P(PORT_CMD));
 	tmp &= ~PORT_CMD_START;
@@ -773,6 +778,8 @@ static void ahci_port_reset_hard(void)
 	if(ahci_port_verify_dev_idle() == false) {
 		VPK("reset idle verify failed\n");
 	}
+
+	ahci_port_init();
 }
 
 

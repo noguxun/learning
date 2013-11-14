@@ -16,6 +16,8 @@ buf_size = block * 512
 
 lib.lax_cmd_rext_pio.restype = POINTER(c_ubyte * (block * 512))
 
+lib.lax_command_simple(c_int(LAX_CMD_TST_PORT_RESET), c_long(0))
+buf = lib.lax_cmd_r_ncq(c_long(lba), c_long(block))
 buf = lib.lax_cmd_r_ncq(c_long(lba), c_long(block))
 
 lib.lax_command_simple(c_int(LAX_CMD_TST_PRINT_REGS), c_long(0))
