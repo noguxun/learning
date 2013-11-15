@@ -7,20 +7,21 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <stdint.h>
 #include <limits.h>
 
 #define MAX_READ_WRITE_LEN     (32l * 1024l * 1024l)
 
-static unsigned char *lax_wbuf = NULL;
-static unsigned char *lax_rbuf = NULL;
+static uint8_t *lax_wbuf = NULL;
+static uint8_t *lax_rbuf = NULL;
 
-static unsigned long lax_rbuf_len = MAX_READ_WRITE_LEN;
-static unsigned long lax_wbuf_len = MAX_READ_WRITE_LEN;
+static uint32_t lax_rbuf_len = MAX_READ_WRITE_LEN;
+static uint32_t lax_wbuf_len = MAX_READ_WRITE_LEN;
 
-static unsigned char lax_wbuf_pat = 0xFF;
+static uint8_t lax_wbuf_pat = 0xFF;
 
 static void lax_rwbuf_map(void);
-static void lax_rwbuf_set_patid(unsigned long lba, unsigned long block, unsigned char pat);
+static void lax_rwbuf_set_patid(uint64_t lba, uint32_t block, uint8_t pat);
 
 enum {
 	LAX_CMD_TST_START = 0x101,
@@ -32,23 +33,18 @@ enum {
 	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
 
-	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
-	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
-	LAX_RW_FLAG_RW              = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
+	LAX_RW_FLAG_NCQ             = (uint32_t)(1 << 2), /* None-NCQ 0, NCQ 1*/
+	LAX_RW_FLAG_XFER_MODE       = (uint32_t)(1 << 1), /* PIO 0,  DMA 1 */
+	LAX_RW_FLAG_RW              = (uint32_t)(1 << 0), /* READ 0, WRITE 1*/
 
 	LAX_SECTOR_SIZE             = 512,
 };
 
-struct lax_io_rext_pio {
-	unsigned long lba;
-	unsigned long block;
-	void *buf;
-};
 
 struct lax_rw {
-	unsigned long lba;
-	unsigned long block;
-	unsigned long flags;
+	uint64_t lba;
+	uint32_t block;
+	uint32_t flags;
 };
 
 
@@ -93,24 +89,24 @@ void lax_command_simple(int cmd, long feature)
 	ioctl(lax_fd, cmd, feature);
 }
 
-static void lax_cmd_rw(unsigned long lba, unsigned long block, unsigned long flag)
+static void lax_cmd_rw(uint64_t lba, uint32_t block, uint32_t flag)
 {
 	struct lax_rw arg;
 	int retval;
-	unsigned char * buf;
+	uint8_t * buf;
 
 	arg.lba = lba;
 	arg.block = block;
 	arg.flags = flag;
 
-	printf("rw lba 0x%lx 0x%lx \n",lba, block);
 	retval = ioctl(lax_fd, LAX_CMD_TST_RW, &arg);
-	printf("rw command retval %d \n", retval);
+
+	printf("rw lba 0x%lx block 0x%x retval %d \n", lba, block, retval);
 }
 
-unsigned char* lax_cmd_rext_dma(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_rext_dma(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
@@ -120,9 +116,9 @@ unsigned char* lax_cmd_rext_dma(unsigned long lba, unsigned long block)
 	return lax_rbuf;
 }
 
-unsigned char* lax_cmd_wext_dma(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_wext_dma(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag |= (LAX_RW_FLAG_RW); /* WRITE */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
@@ -133,9 +129,9 @@ unsigned char* lax_cmd_wext_dma(unsigned long lba, unsigned long block)
 	return lax_wbuf;
 }
 
-unsigned char* lax_cmd_r_ncq(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_r_ncq(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
@@ -148,9 +144,9 @@ unsigned char* lax_cmd_r_ncq(unsigned long lba, unsigned long block)
 }
 
 
-unsigned char* lax_cmd_w_ncq(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_w_ncq(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag |= (LAX_RW_FLAG_RW); /* WRITE */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
@@ -163,9 +159,9 @@ unsigned char* lax_cmd_w_ncq(unsigned long lba, unsigned long block)
 	return lax_wbuf;
 }
 
-unsigned char* lax_cmd_rext_pio(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_rext_pio(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
@@ -175,9 +171,9 @@ unsigned char* lax_cmd_rext_pio(unsigned long lba, unsigned long block)
 	return lax_rbuf;
 }
 
-unsigned char* lax_cmd_wext_pio(unsigned long lba, unsigned long block)
+uint8_t* lax_cmd_wext_pio(uint64_t lba, uint32_t block)
 {
-	unsigned long flag = 0;
+	uint32_t flag = 0;
 
 	flag |= (LAX_RW_FLAG_RW); /* WRITE */
 	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
@@ -188,17 +184,17 @@ unsigned char* lax_cmd_wext_pio(unsigned long lba, unsigned long block)
 	return lax_wbuf;
 }
 
-void lax_rwbuf_set_patid(unsigned long lba, unsigned long block, unsigned char pat)
+void lax_rwbuf_set_patid(uint64_t lba, uint32_t block, uint8_t pat)
 {
-	unsigned long i;
+	uint32_t i;
 
 	// set pattern
 	memset(lax_wbuf, pat, block * LAX_SECTOR_SIZE);
 
 	// set id
 	for(i=0; i < block; i++) {
-		unsigned long *p;
-		p = (unsigned long *)((unsigned char *)lax_wbuf + (i * LAX_SECTOR_SIZE));
+		uint64_t *p;
+		p = (uint64_t *)((uint8_t *)lax_wbuf + (i * LAX_SECTOR_SIZE));
 		*p = lba + i;
 	}
 }
@@ -218,13 +214,13 @@ void lax_rwbuf_map(void)
 		exit(1);
 	}
 
-	lax_wbuf = (((unsigned char *)lax_rbuf) + lax_rbuf_len);
+	lax_wbuf = (((uint8_t *)lax_rbuf) + lax_rbuf_len);
 }
 
-void lax_rbuf_dump(unsigned long size)
+void lax_rbuf_dump(uint32_t size)
 {
-	unsigned char *p = lax_rbuf;
-	unsigned long i;
+	uint8_t *p = lax_rbuf;
+	uint32_t i;
 
 	if(p == NULL) {
 		printf("not mapped\n");
@@ -242,7 +238,7 @@ void lax_rbuf_dump(unsigned long size)
 	}
 }
 
-void lax_wbuf_set_pat(unsigned char pat)
+void lax_wbuf_set_pat(uint8_t pat)
 {
 	lax_wbuf_pat = pat;
 }

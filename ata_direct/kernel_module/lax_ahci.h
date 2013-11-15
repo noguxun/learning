@@ -174,9 +174,9 @@ struct ahci_cmd_hdr {
 };
 
 struct lax_rw {
-	unsigned long lba;
-	unsigned long block;
-	unsigned long flags;
+	uint64_t  lba;
+	uint32_t  block;
+	uint32_t  flags;
 };
 
 
@@ -208,6 +208,11 @@ struct lax_ahci {
 	struct lax_port ports[AHCI_MAX_PORTS];
 	int port_index;
 	bool port_initialized;
+};
+
+union u64_b {
+	u64  data;
+	u8   b[8];
 };
 
 union u32_b {

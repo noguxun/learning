@@ -185,57 +185,44 @@ static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size, unsigned 
 	return n_elem;
 }
 
-static void ahci_fill_tf_ncq(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
+static void ahci_fill_tf(u8 cmd, u16 feature, u64 lba, u16 block,
+				struct ata_taskfile *tf, bool ncq)
 {
 	unsigned int tag = 0;
-	union u32_b u32_data;
-	union u16_b u16_data;
+	union u64_b d64;
+	union u16_b d16;
 
 	tf->command = cmd;
 
-	u32_data.data = lba;
-	tf->hob_lbah = 0;
-	tf->hob_lbam = 0;
-	tf->hob_lbal = u32_data.b[3];
-	tf->lbah = u32_data.b[2];
-	tf->lbam = u32_data.b[1];
-	tf->lbal = u32_data.b[0];
+	d64.data = lba;
+	tf->hob_lbah = d64.b[5];
+	tf->hob_lbam = d64.b[4];
+	tf->hob_lbal = d64.b[3];
+	tf->lbah     = d64.b[2];
+	tf->lbam     = d64.b[1];
+	tf->lbal     = d64.b[0];
 
-	tf->nsect = tag << 3;
+	if(ncq) {
+		tf->nsect = tag << 3;
 
-	u16_data.data = block;
-	tf->hob_feature = u16_data.b[1];
-	tf->feature = u16_data.b[0];
+		d16.data = block;
+		tf->hob_feature = d16.b[1];
+		tf->feature = d16.b[0];
 
-	tf->device = ATA_LBA;
+		tf->device = ATA_LBA;
+	}
+	else {
+		d16.data = block;
+		tf->hob_nsect = d16.b[1];
+		tf->nsect = d16.b[0];
+
+		d16.data = feature;
+		tf->hob_feature = d16.b[1];
+		tf->feature = d16.b[0];
+
+		tf->device = 0xa0 | 0x40; /* using lba, copied code from hparm*/
+	}
 }
-
-static void ahci_fill_tf(u8 cmd, u16 feature, u32 lba, u16 block, struct ata_taskfile *tf)
-{
-	union u32_b u32_data;
-	union u16_b u16_data;
-
-	tf->command = cmd;
-
-	u32_data.data = lba;
-	tf->hob_lbah = 0;
-	tf->hob_lbam = 0;
-	tf->hob_lbal = u32_data.b[3];
-	tf->lbah = u32_data.b[2];
-	tf->lbam = u32_data.b[1];
-	tf->lbal = u32_data.b[0];
-
-	u16_data.data = block;
-	tf->hob_nsect = u16_data.b[1];
-	tf->nsect = u16_data.b[0];
-
-	u16_data.data = feature;
-	tf->hob_feature = u16_data.b[1];
-	tf->feature = u16_data.b[0];
-
-	tf->device = 0xa0 | 0x40; /* using lba, copied code from hparm*/
-}
-
 
 
 static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag, u32 cmd_opts)
@@ -430,7 +417,7 @@ static void ahci_exec_cmd_pio_datain(u8 command, u16 feature, unsigned long bloc
 		bit_pos, tag, command, feature, block);
 
 	ahci_tf_init(&tf);
-	ahci_fill_tf(command, feature, 0, block, &tf);
+	ahci_fill_tf(command, feature, 0, block, &tf, false);
 
 	ahci_cmd_prep_rw(&tf, tag, 0, block * LAX_SECTOR_SIZE, 0);
 
@@ -456,6 +443,7 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	u32 cmdopts = 0;
 	u8 command;
 	unsigned int direction;
+	bool ncq;
 
 	copy_from_user(&arg, (void *)uarg, sizeof(struct lax_rw));
 
@@ -474,18 +462,14 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 		arg.block = 0x10000;
 	}
 
-	if((arg.flags & LAX_RW_FLAG_NCQ) == 0) {
-		ahci_fill_tf(command, 0x00, arg.lba, arg.block, &tf);
-	}
-	else{
-		ahci_fill_tf_ncq(command, 0x00, arg.lba, arg.block, &tf);
-	}
+	ncq = ((arg.flags & LAX_RW_FLAG_NCQ) != 0);
+	ahci_fill_tf(command, 0x00, arg.lba, arg.block, &tf, ncq);
 
 	direction = ((arg.flags & LAX_RW_FLAG_RW) == 0)? LAX_READ : LAX_WRITE;
 	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE, direction);
 
 	/* issue command */
-	if((arg.flags & LAX_RW_FLAG_NCQ) != 0) {
+	if(ncq) {
 		iowrite32(bit_pos, P(PORT_SCR_ACT));
 	}
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
@@ -495,14 +479,12 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 		printk(KERN_ERR "timeout exec command 0x%x\n", command);
 	}
 
-	if((arg.flags & LAX_RW_FLAG_NCQ) != 0 &&
-		ahci_busy_wait_not(1000, P(PORT_SCR_ACT), bit_pos, bit_pos) == false) {
+	if(ncq && ahci_busy_wait_not(1000, P(PORT_SCR_ACT), bit_pos, bit_pos) == false) {
 		printk(KERN_ERR "timeout exec command 0x%x\n", command);
-
 	}
+
 	ahci_port_clear_irq();
 	ahci_port_clear_sata_err();
-
 END:
 	return;
 }
@@ -516,7 +498,7 @@ static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 		bit_pos, tag, command, feature);
 
 	ahci_tf_init(&tf);
-	ahci_fill_tf(command, feature, 0, 0, &tf);
+	ahci_fill_tf(command, feature, 0, 0, &tf, false);
 
 	ahci_cmd_prep_nodata(&tf, tag, AHCI_CMD_CLR_BUSY);
 
