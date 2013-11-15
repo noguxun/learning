@@ -45,6 +45,7 @@ struct lax_rw {
 	uint64_t lba;
 	uint32_t block;
 	uint32_t flags;
+	uint32_t tfd;
 };
 
 
@@ -89,7 +90,7 @@ void lax_command_simple(int cmd, long feature)
 	ioctl(lax_fd, cmd, feature);
 }
 
-static void lax_cmd_rw(uint64_t lba, uint32_t block, uint32_t flag)
+static uint32_t lax_cmd_rw(uint64_t lba, uint32_t block, uint32_t flag)
 {
 	struct lax_rw arg;
 	int retval;
@@ -101,22 +102,22 @@ static void lax_cmd_rw(uint64_t lba, uint32_t block, uint32_t flag)
 
 	retval = ioctl(lax_fd, LAX_CMD_TST_RW, &arg);
 
-	printf("rw lba 0x%lx block 0x%x retval %d \n", lba, block, retval);
+	printf("rw lba 0x%lx block 0x%x retval %d tfd 0x%x \n", lba, block, retval, arg.tfd);
+
+	return arg.tfd;
 }
 
-uint8_t* lax_cmd_rext_dma(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_rext_dma(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
 	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
 
-	lax_cmd_rw(lba, block, flag);
-
-	return lax_rbuf;
+	return lax_cmd_rw(lba, block, flag);
 }
 
-uint8_t* lax_cmd_wext_dma(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_wext_dma(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
@@ -124,12 +125,10 @@ uint8_t* lax_cmd_wext_dma(uint64_t lba, uint32_t block)
 	flag |= (LAX_RW_FLAG_XFER_MODE);  /* DMA */
 
 	lax_rwbuf_set_patid(lba, block, lax_wbuf_pat);
-	lax_cmd_rw(lba, block, flag);
-
-	return lax_wbuf;
+	return lax_cmd_rw(lba, block, flag);
 }
 
-uint8_t* lax_cmd_r_ncq(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_r_ncq(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
@@ -138,13 +137,11 @@ uint8_t* lax_cmd_r_ncq(uint64_t lba, uint32_t block)
 	flag |= (LAX_RW_FLAG_NCQ);  /* NCQ */
 
 	lax_rwbuf_set_patid(lba, block, lax_wbuf_pat);
-	lax_cmd_rw(lba, block, flag);
-
-	return lax_rbuf;
+	return lax_cmd_rw(lba, block, flag);
 }
 
 
-uint8_t* lax_cmd_w_ncq(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_w_ncq(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
@@ -154,24 +151,21 @@ uint8_t* lax_cmd_w_ncq(uint64_t lba, uint32_t block)
 
 	lax_rwbuf_set_patid(lba, block, lax_wbuf_pat);
 
-	lax_cmd_rw(lba, block, flag);
-
-	return lax_wbuf;
+	return lax_cmd_rw(lba, block, flag);
 }
 
-uint8_t* lax_cmd_rext_pio(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_rext_pio(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
 	flag &= (~LAX_RW_FLAG_RW); /* READ */
 	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
 
-	lax_cmd_rw(lba, block, flag);
+	return lax_cmd_rw(lba, block, flag);
 
-	return lax_rbuf;
 }
 
-uint8_t* lax_cmd_wext_pio(uint64_t lba, uint32_t block)
+uint32_t lax_cmd_wext_pio(uint64_t lba, uint32_t block)
 {
 	uint32_t flag = 0;
 
@@ -179,9 +173,8 @@ uint8_t* lax_cmd_wext_pio(uint64_t lba, uint32_t block)
 	flag &= (~LAX_RW_FLAG_XFER_MODE); /* PIO */
 
 	lax_rwbuf_set_patid(lba, block, lax_wbuf_pat);
-	lax_cmd_rw(lba, block, flag);
 
-	return lax_wbuf;
+	return lax_cmd_rw(lba, block, flag);
 }
 
 void lax_rwbuf_set_patid(uint64_t lba, uint32_t block, uint8_t pat)

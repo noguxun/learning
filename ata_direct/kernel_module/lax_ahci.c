@@ -441,6 +441,7 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	struct ata_taskfile tf;
 	u32 bit_pos = 1 << tag;
 	u32 cmdopts = 0;
+	u32 tfd;
 	u8 command;
 	unsigned int direction;
 	bool ncq;
@@ -482,6 +483,10 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	if(ncq && ahci_busy_wait_not(1000, P(PORT_SCR_ACT), bit_pos, bit_pos) == false) {
 		printk(KERN_ERR "timeout exec command 0x%x\n", command);
 	}
+
+	/* copy task file data to user space */
+	tfd = ioread32(P(PORT_TFDATA));
+	copy_to_user((void *)(uarg + offsetof(struct lax_rw, tfd)), &tfd, sizeof(tfd));
 
 	ahci_port_clear_irq();
 	ahci_port_clear_sata_err();

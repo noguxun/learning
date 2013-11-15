@@ -12,31 +12,70 @@ LAX_CMD_TST_RESTORE_IRQ    = 0x107
 
 lib = cdll.LoadLibrary('./liblaxcore.so')
 
+
 def open():
     lib.lax_open()
+
 
 def close():
     lib.lax_close()
 
+
 def reset():
-    lib.lax_command_simple(c_int(LAX_CMD_TST_PORT_RESET), c_long(0))
+    tfd = lib.lax_command_simple(c_int(LAX_CMD_TST_PORT_RESET), c_long(0))
+    return stsmsg(tfd)
+
 
 def rext(lba, sn):
-    lib.lax_cmd_rext_pio(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_rext_pio(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
+
 
 def wext(lba, sn):
-    lib.lax_cmd_wext_pio(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_wext_pio(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
+
 
 def rdmaext(lba, sn):
-    lib.lax_cmd_rext_dma(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_rext_dma(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
+
 
 def wdmaext(lba, sn):
-    lib.lax_cmd_wext_dma(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_wext_dma(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
+
 
 def rncq(lba, sn):
-    print("rncq xx lba " + hex(lba) + " sn " + hex(sn) )
-    lib.lax_cmd_r_ncq(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_r_ncq(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
+
 
 def wncq(lba, sn):
-    lib.lax_cmd_w_ncq(c_long(lba), c_long(sn))
+    tfd = lib.lax_cmd_w_ncq(c_long(lba), c_long(sn))
+    return stsmsg(tfd)
 
+
+def stsmsg(tfd):
+    # format AHCI spec, 3.3.8, Port x Task File Data
+    err_msg = ""
+    if tfd & 0xff00 != 0:
+        err_msg = "err:"
+    if tfd & 0x8000:
+        err_msg = err_msg + " CRC"
+    if tfd & 0x4000:
+        err_msg = err_msg + " UNC"
+    if tfd & 0x2000:
+        err_msg = err_msg + " MC"
+    if tfd & 0x1000:
+        err_msg = err_msg + " IDNF"
+    if tfd & 0x0800:
+        err_msg = err_msg + " MCR"
+    if tfd & 0x0400:
+        err_msg = err_msg + " ABRT"
+    if tfd & 0x0200:
+        err_msg = err_msg + " TK0NF"
+    if tfd & 0x0100:
+        err_msg = err_msg + " AMNF"
+
+    return err_msg;
