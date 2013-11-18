@@ -18,7 +18,6 @@
  * only the port is configurable
  * the first the controller will be used
  *
- * TODO: currently, lba is a 32 bit variable, needs to make it 48 bit
  */
 
 static void ahci_port_init(void);
@@ -149,7 +148,7 @@ static void ahci_fill_cmd_slot(struct lax_port *port,unsigned int tag, u32 opts)
 	VPK("fill cmd slot tag %d, opts 0x%x\n", tag, opts );
 }
 
-static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size, unsigned int direction)
+static unsigned int ahci_fill_sg(unsigned int tag, u32 size, u32 direction)
 {
 	unsigned int n_elem = 0;
 	struct lax_port *port = get_port();
@@ -172,7 +171,7 @@ static unsigned int ahci_fill_sg(unsigned int tag, unsigned long size, unsigned 
 		*(sg_base + 2) = 0;
 		*(sg_base + 3) = cpu_to_le32(len -1);
 
-		VPK("sg set sg%d, len 0x%x, size 0x%lx \n", n_elem, *(sg_base + 3), size);
+		VPK("sg set sg%d, len 0x%x, size 0x%x \n", n_elem, *(sg_base + 3), size);
 
 		size -= len;
 		n_elem ++;
@@ -245,19 +244,22 @@ static void ahci_cmd_prep_nodata(const struct ata_taskfile *tf, unsigned int tag
 }
 
 static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
-				u32 cmd_opts, unsigned long size, unsigned int direction)
+				u32 cmd_opts, u16 block, unsigned int direction)
 {
 	void * cmd_tbl;
 	unsigned int n_elem;
 	const u32 cmd_fis_len = 5; /* five dwords */
 	u32 opts;
 	struct lax_port *port = get_port();
+	u32 size;
 
+	size = ( block == 0 ) ? 0x10000 : block;
+	size = size * LAX_SECTOR_SIZE;
 	cmd_tbl = port->cmd_tbl + tag * AHCI_CMD_TBL_SZ;
 
 	ahci_tf_to_fis(tf, 0, 1, cmd_tbl);
 
-	VPK("prepare data of size 0x%lx\n", size);
+	VPK("prepare data of size 0x%x\n", size);
 
 	n_elem = ahci_fill_sg(tag , size, direction);
 
@@ -265,6 +267,8 @@ static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
 	ahci_fill_cmd_slot(port, tag, opts);
 }
 
+/* currently not used */
+#if 0
 static bool ahci_busy_wait_irq(u32 wait_msec)
 {
 	u32 i = wait_msec;
@@ -280,6 +284,7 @@ static bool ahci_busy_wait_irq(u32 wait_msec)
 
 	return false;
 }
+#endif
 
 static bool ahci_busy_wait_not(u32 wait_msec, void __iomem *reg, u32 mask, u32 val)
 {
@@ -407,31 +412,45 @@ END:
 
 }
 
-static void ahci_exec_cmd_pio_datain(u8 command, u16 feature, unsigned long block)
+
+
+static void ahci_exec_cmd_pio_data_in_out(u8 command, u16 feature, u64 lba, u16 block, u32 direction)
 {
 	unsigned int tag = 0;
 	struct ata_taskfile tf;
 	u32 bit_pos = 1 << tag;
 
-	VPK("exec cmd, issue reg 0x%x, tag 0x%x, command 0x%x feature 0x%x, block 0x%lx\n",
-		bit_pos, tag, command, feature, block);
+	VPK("exec command 0x%x feature 0x%x, lba 0x%llx block 0x%x direction %d\n",
+		command, feature, lba, block, direction);
 
 	ahci_tf_init(&tf);
-	ahci_fill_tf(command, feature, 0, block, &tf, false);
+	ahci_fill_tf(command, feature, lba, block, &tf, false);
 
-	ahci_cmd_prep_rw(&tf, tag, 0, block * LAX_SECTOR_SIZE, 0);
+	ahci_cmd_prep_rw(&tf, tag, 0, block, direction);
 
 	/* issue command */
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
 
 	/* wait command complete */
-	if(ahci_busy_wait_irq(1000) == false) {
+	if(ahci_busy_wait_not(100, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == false) {
 		printk(KERN_ERR "timeout exec command 0x%x\n", command);
 		return;
 	}
 
 	ahci_port_clear_irq();
 	ahci_port_clear_sata_err();
+}
+
+static void ahci_exec_cmd_id(void)
+{
+	ahci_exec_cmd_pio_data_in_out(ATA_CMD_ID_ATA, 0xFF00, 0x00, 1, 0);
+}
+
+static void ahci_exec_cmd_dl_micro_code(u16 block)
+{
+	u16 b = block & 0x00FF;
+	u64 lba = ( block >> 8 ) & 0x00FF;
+	ahci_exec_cmd_pio_data_in_out(ATA_CMD_DOWNLOAD_MICRO, 0x00, lba, b, 1);
 }
 
 static void ahci_exec_cmd_rw(unsigned long uarg)
@@ -459,15 +478,11 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 
 	VPK("exec rw command 0x%x", command);
 
-	if(arg.block == 0) {
-		arg.block = 0x10000;
-	}
-
 	ncq = ((arg.flags & LAX_RW_FLAG_NCQ) != 0);
 	ahci_fill_tf(command, 0x00, arg.lba, arg.block, &tf, ncq);
 
 	direction = ((arg.flags & LAX_RW_FLAG_RW) == 0)? LAX_READ : LAX_WRITE;
-	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block * LAX_SECTOR_SIZE, direction);
+	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block, direction);
 
 	/* issue command */
 	if(ncq) {
@@ -493,6 +508,7 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 END:
 	return;
 }
+
 
 static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
 {
@@ -587,7 +603,6 @@ static bool ahci_port_verify_dev_idle(void)
 	tmp = ioread32(P(PORT_SCR_STAT));
 	if((tmp & 0xF) != 0x3 ) {
 		return false;
-
 	}
 
 	return true;
@@ -814,9 +829,7 @@ static void ahci_port_init(void)
 	if(ahci_port_verify_dev_idle() == false) {
 		VPK("device not preset, shall we try hard port reset?");
 		return;
-	}
-
-	ahci_port_engine_start();
+	} ahci_port_engine_start();
 }
 
 static void ahci_port_deinit(void)
@@ -848,13 +861,16 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		ahci_port_reset_hard();
 	}
 	else if(cmd == LAX_CMD_TST_ID) {
-		ahci_exec_cmd_pio_datain(ATA_CMD_ID_ATA, 0xFF00, 1);
+		ahci_exec_cmd_id();
 	}
 	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
 		ahci_port_restore_irq_mask();
 	}
 	else if(cmd == LAX_CMD_TST_RW) {
 		ahci_exec_cmd_rw(arg);
+	}
+	else if(cmd == LAX_CMD_TST_MICRO_CODE) {
+		ahci_exec_cmd_dl_micro_code((u16)arg);
 	}
 	else {
 		printk(KERN_WARNING "not supported command 0x%x ", cmd);

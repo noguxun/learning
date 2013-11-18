@@ -43,7 +43,7 @@ enum {
 
 struct lax_rw {
 	uint64_t lba;
-	uint32_t block;
+	uint16_t block;
 	uint32_t flags;
 	uint32_t tfd;
 };

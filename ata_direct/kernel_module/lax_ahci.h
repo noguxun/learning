@@ -17,6 +17,7 @@ enum {
 	LAX_CMD_TST_ID,
 	LAX_CMD_TST_RW,
 	LAX_CMD_TST_RESTORE_IRQ,
+	LAX_CMD_TST_MICRO_CODE,
 
 	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
 	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
@@ -175,7 +176,7 @@ struct ahci_cmd_hdr {
 
 struct lax_rw {
 	uint64_t lba;
-	uint32_t block;
+	uint16_t block;
 	uint32_t flags;
 	uint32_t tfd;
 };
