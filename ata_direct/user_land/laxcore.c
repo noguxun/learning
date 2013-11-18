@@ -237,4 +237,21 @@ void lax_wbuf_set_pat(uint8_t pat)
 }
 
 
+int lax_cmp_rw_buf(uint32_t sn)
+{
+	uint32_t buf_size = sn * LAX_SECTOR_SIZE;
+	uint32_t i;
+
+
+	for(i = 0; i < sn; i++) {
+		int res;
+		res = memcmp(lax_rbuf, lax_wbuf, LAX_SECTOR_SIZE);
+		if(res != 0) {
+			return i;
+		}
+	}
+
+	return -1;
+}
+
 
