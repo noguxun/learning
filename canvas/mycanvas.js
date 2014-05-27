@@ -4,10 +4,7 @@ var drawingApp = (function(){
    var canvas,
    ctx,
    intervalHandle,
-   angle1 = 0,
-   angle2 = 0,
-   angle3 = 0,
-
+   circleModels,
 
    log = function(x){
      console.log(x);
@@ -16,7 +13,19 @@ var drawingApp = (function(){
    initCanvas = function(){
      canvas = document.getElementById('myCanvas');
      ctx = canvas.getContext('2d');
-     intervalHandle = setInterval(draw2, 100);
+     intervalHandle = setInterval(draw2, 50);
+   },
+
+   initModel = function(){
+     var data;
+     circleModels = new Array();
+
+     data = { radius: 100, step: 1, color: "#ff0000", angle: 0 };
+     circleModels.push( data );
+     data = { radius: 50, step: 2, color: "#00ff00", angle: 0 };
+     circleModels.push( data );
+     data = { radius: 20, step: 4, color: "#000000", angle: 0 };
+     circleModels.push( data );
    },
 
    dot = function( x, y ){
@@ -46,7 +55,7 @@ var drawingApp = (function(){
      log("draw sin");
    },
 
-   circle = function(cx, cy, radius, angle){
+   circle = function(cx, cy, radius, angle, color){
 
      var x, y;
      x = cx + radius * Math.cos(angle * (Math.PI / 180));
@@ -56,40 +65,36 @@ var drawingApp = (function(){
      ctx.arc(cx, cy, radius, 0, 2*Math.PI, false);
      ctx.moveTo(cx, cy);
      ctx.lineTo(x, y);
+     ctx.strokeStyle = color;
      ctx.stroke();
 
      return { x: x, y: y};
    },
 
-   updateAngle = function() {
-     angle1 += 1;
-     if(angle1 == 360){
-       angle1 = 0;
-     }
-     angle2 += 2;
-     if(angle2 == 360){
-       angle2 = 0;
-     }
-     angle3 += 5;
-     if(angle3 == 360){
-       angle3 = 0;
+   updateModel = function() {
+     for(var i = 0; i< circleModels.length; i++){
+       circleModels[i].angle += circleModels[i].step;
+       if(circleModels[i].angle == 360){
+         circleModels[i].angle = 0;
+       }
      }
    },
 
    draw2 = function(){
-     var dot1 = {};
-     var dot2 = {};
+     var dot = {};
 
      clearRect();
-     dot1 = circle(300, 300, 100, angle1);
-     dot2 = circle(dot1.x, dot1.y, 50, angle2);
-     circle(dot2.x, dot2.y, 25, angle3);
+     dot = circle(300, 300, circleModels[0].radius, circleModels[0].angle, circleModels[0]color);
+     for(var i = 1; i< circleModels.length; i++){
+       dot = circle(dot.x, dot.y, circleModels[i].radius, circleModels[i].angle, circleModels[i]color);
+     }
 
-     updateAngle();
+     updateModel();
   },
 
    mainExec = function() {
      initCanvas();
+     initModel();
      draw2();
    };
 
