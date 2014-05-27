@@ -5,12 +5,19 @@ var drawingApp = (function(){
    ctx,
    intervalHandle,
    cirMods = [
-       { radius: 100, step: 1, color: "#ff0000", angle: 0 },
-       { radius: 50, step: 2, color: "purple", angle: 0 },
-       { radius: 20, step: 4, color: "blue", angle: 0 },
+       { radius: 100, step:  1, color:  "#ff0000",   angle: 0 },
+       { radius:  60, step:  3, color:  "#0ff0f0",   angle: 0 },
+       { radius:  40, step:  5, color:  "#00f00f",   angle: 0 },
+       //{ radius:  20, step:  7, color:  "#000ff0",   angle: 0 },
+       //{ radius:  10, step:  9, color:  "#0000ff",   angle: 0 },
+       //{ radius:  5, step: 11, color:  "#0f0f00",   angle: 0 },
      ],
-   centerX = 300,
-   centerY = 300,
+   centerX = 200,
+   centerY = 200,
+   redrawInternal = 50,
+   curveDots = new Array(),
+   curveLimit = 3000,
+   curveColor = "black",
 
    log = function(x){
      console.log(x);
@@ -19,14 +26,28 @@ var drawingApp = (function(){
    initCanvas = function(){
      canvas = document.getElementById('myCanvas');
      ctx = canvas.getContext('2d');
-     intervalHandle = setInterval(draw2, 50);
+     intervalHandle = setInterval(draw, redrawInternal);
    },
 
-   dot = function( x, y ){
+   drawDotExt = function(x, y ,size){
+   },
+
+   drawDot = function(x, y){
      ctx.fillRect( x, y, 1, 1);
    },
 
-   clearRect = function() {
+   arrowLine = function(fromx, fromy, tox, toy){
+     // http://stackoverflow.com/questions/808826/draw-arrow-on-canvas-tag
+     var headlen = 10;   // length of head in pixels
+     var angle = Math.atan2(toy-fromy,tox-fromx);
+     ctx.moveTo(fromx, fromy);
+     ctx.lineTo(tox, toy);
+     ctx.lineTo(tox-headlen*Math.cos(angle-Math.PI/6),toy-headlen*Math.sin(angle-Math.PI/6));
+     ctx.moveTo(tox, toy);
+     ctx.lineTo(tox-headlen*Math.cos(angle+Math.PI/6),toy-headlen*Math.sin(angle+Math.PI/6));
+   },
+
+   clearRect = function(){
      ctx.clearRect(0, 0, canvas.width, canvas.height);
      // Store the current transformation matrix
      ctx.save();
@@ -39,17 +60,7 @@ var drawingApp = (function(){
      ctx.restore();
    },
 
-   draw1 = function(){
-     var x, y, i;
-     x = angle;
-     y = Math.sin( x * (Math.PI / 180)  ) * 60;
-     dot( x, y + 100 );
-     angle ++
-
-     log("draw sin");
-   },
-
-   circle = function(cx, cy, radius, angle, color){
+   drawCircle = function(cx, cy, radius, angle, color){
 
      var x, y;
      x = cx + radius * Math.cos(angle * (Math.PI / 180));
@@ -65,30 +76,55 @@ var drawingApp = (function(){
      return { x: x, y: y};
    },
 
-   updateModel = function() {
+   updateModel = function(dotY) {
      for(var i = 0; i< cirMods.length; i++){
        cirMods[i].angle += cirMods[i].step;
        if(cirMods[i].angle == 360){
          cirMods[i].angle = 0;
        }
      }
+
+     curveDots.push(dotY);
+     if(curveDots.length > curveLimit){
+       curveDots.shift();
+     }
    },
 
-   draw2 = function(){
+   drawCurve = function(dot){
+     var startX = centerX + 250;
+     var startY = curveDots[curveDots.length-1];
+
+     ctx.beginPath();
+     arrowLine(dot.x, dot.y, startX, startY);
+     drawDot(startX, startY);
+     ctx.moveTo(startX, startY);
+     for(var i = curveDots.length - 2; i >=0; i-- ) {
+       ctx.lineTo(startX, curveDots[i]);
+       startX++;
+     }
+
+     ctx.strokeStyle = curveColor;
+     ctx.stroke();
+   },
+
+   draw = function(){
      var dot = {};
 
      clearRect();
-     dot = circle(centerX, centerY, cirMods[0].radius, cirMods[0].angle, cirMods[0].color);
+
+     dot = drawCircle(centerX, centerY, cirMods[0].radius, cirMods[0].angle, cirMods[0].color);
      for(var i = 1; i< cirMods.length; i++){
-       dot = circle(dot.x, dot.y, cirMods[i].radius, cirMods[i].angle, cirMods[i].color);
+       dot = drawCircle(dot.x, dot.y, cirMods[i].radius, cirMods[i].angle, cirMods[i].color);
      }
 
-     updateModel();
+     updateModel(dot.y);
+
+     drawCurve(dot);
   },
 
    mainExec = function() {
      initCanvas();
-     draw2();
+     draw();
    };
 
    return {
