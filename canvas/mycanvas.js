@@ -4,7 +4,13 @@ var drawingApp = (function(){
    var canvas,
    ctx,
    intervalHandle,
-   circleModels,
+   cirMods = [
+       { radius: 100, step: 1, color: "#ff0000", angle: 0 },
+       { radius: 50, step: 2, color: "purple", angle: 0 },
+       { radius: 20, step: 4, color: "blue", angle: 0 },
+     ],
+   centerX = 300,
+   centerY = 300,
 
    log = function(x){
      console.log(x);
@@ -14,18 +20,6 @@ var drawingApp = (function(){
      canvas = document.getElementById('myCanvas');
      ctx = canvas.getContext('2d');
      intervalHandle = setInterval(draw2, 50);
-   },
-
-   initModel = function(){
-     var data;
-     circleModels = new Array();
-
-     data = { radius: 100, step: 1, color: "#ff0000", angle: 0 };
-     circleModels.push( data );
-     data = { radius: 50, step: 2, color: "#00ff00", angle: 0 };
-     circleModels.push( data );
-     data = { radius: 20, step: 4, color: "#000000", angle: 0 };
-     circleModels.push( data );
    },
 
    dot = function( x, y ){
@@ -72,10 +66,10 @@ var drawingApp = (function(){
    },
 
    updateModel = function() {
-     for(var i = 0; i< circleModels.length; i++){
-       circleModels[i].angle += circleModels[i].step;
-       if(circleModels[i].angle == 360){
-         circleModels[i].angle = 0;
+     for(var i = 0; i< cirMods.length; i++){
+       cirMods[i].angle += cirMods[i].step;
+       if(cirMods[i].angle == 360){
+         cirMods[i].angle = 0;
        }
      }
    },
@@ -84,9 +78,9 @@ var drawingApp = (function(){
      var dot = {};
 
      clearRect();
-     dot = circle(300, 300, circleModels[0].radius, circleModels[0].angle, circleModels[0]color);
-     for(var i = 1; i< circleModels.length; i++){
-       dot = circle(dot.x, dot.y, circleModels[i].radius, circleModels[i].angle, circleModels[i]color);
+     dot = circle(centerX, centerY, cirMods[0].radius, cirMods[0].angle, cirMods[0].color);
+     for(var i = 1; i< cirMods.length; i++){
+       dot = circle(dot.x, dot.y, cirMods[i].radius, cirMods[i].angle, cirMods[i].color);
      }
 
      updateModel();
@@ -94,7 +88,6 @@ var drawingApp = (function(){
 
    mainExec = function() {
      initCanvas();
-     initModel();
      draw2();
    };
 
