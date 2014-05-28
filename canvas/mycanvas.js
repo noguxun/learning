@@ -122,13 +122,13 @@ var drawingApp = (function(){
      drawCurve(dot);
   },
 
-   mainExec = function() {
-     initCanvas();
-     draw();
-   };
+  mainExec = function() {
+    initCanvas();
+    draw();
+  };
 
-   return {
-     main: mainExec
-   };
+  return {
+    main: mainExec
+  };
 
 }());
