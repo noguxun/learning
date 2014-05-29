@@ -6,11 +6,23 @@
         margin: 0px;
         padding: 0px;
       }
+      #d0 {
+        border-style:solid;
+        border-width:1px;
+      }
+      #d1 {
+      }
     </style>
     <script src="mycanvas.js"></script>
   </head>
   <body>
-    <canvas id="myCanvas" width="1600" height="600"></canvas>
+    <div id="d0">
+      <canvas id="myCanvas" width="2000" height="600"></canvas>
+    </div>
+    <div id="d1">
+      <input type="text" id="txt0">
+      <button id="btn0">Update</button>
+    </div>
     <script>
       drawingApp.main();
     </script>
