@@ -14,9 +14,9 @@ var drawingApp = (function(){
        { radius: (4 / (Math.PI * 9))*100, step:  9, color:  "#0000ff",   angle: 0 },
        { radius: (4 / (Math.PI * 11))*100, step: 11, color:  "#0f0f00",   angle: 0 },
      ],
-  centerX = 200,
+  centerX = 250,
   centerY = 200,
-  redrawInternal = 10,
+  redrawInternal = 30,
   curveDots = new Array(),
   curveLimit = 3000,
   curveColor = "black",
@@ -138,7 +138,6 @@ var drawingApp = (function(){
     textbox = document.getElementById('txt0');
     document.getElementById('btn0').onclick = updateClick;
     textbox.value = cirNum;
-
     initCanvas();
     draw();
   };
