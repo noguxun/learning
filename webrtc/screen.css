@@ -1,0 +1,14 @@
+#canvas_holder {
+  border-style: solid;
+  border-color: orange;
+  width: 1000px;
+  height: 400px;
+  margin: auto;
+}
+
+#ctl {
+  width: 1000px;
+  margin: auto;
+  flex-direction: row;
+  margin-top: 10px;
+}
