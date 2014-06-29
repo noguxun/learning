@@ -20,7 +20,7 @@ $(document).ready(function() {
     });
 
     connection.on('data', function(data){
-      console.log("got data: " + data );
+      console.log( data );
     });
 
   });
