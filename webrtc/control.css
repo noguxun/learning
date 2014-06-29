@@ -1,3 +1,9 @@
 
-body { margin: 0px; overflow: hidden; }
-canvas { border: 1px solid black; }
+
+#canvas_holder {
+  border-style: solid;
+  border-color: orange;
+  width: 800px;
+  height: 400px;
+  margin: auto;
+}
