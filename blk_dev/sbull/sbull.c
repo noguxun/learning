@@ -7,20 +7,9 @@
 #include <linux/moduleparam.h>
 
 
-//#include <linux/sched.h>
-//#include <linux/kernel.h>	/* printk() */
 #include <linux/slab.h>		/* kmalloc() */
 #include <linux/fs.h>		/* everything... */
-//#include <linux/errno.h>	/* error codes */
-//#include <linux/timer.h>
-//#include <linux/types.h>	/* size_t */
-//#include <linux/fcntl.h>	/* O_ACCMODE */
-//#include <linux/hdreg.h>	/* HDIO_GETGEO */
-//#include <linux/kdev_t.h>
-//#include <linux/vmalloc.h>
-//#include <linux/genhd.h>
 #include <linux/blkdev.h>
-//#include <linux/buffer_head.h>	/* invalidate_bdev */
 #include <linux/bio.h>
 
 MODULE_LICENSE("GPL");
@@ -29,7 +18,7 @@ static int sbull_major = 0;
 module_param(sbull_major, int, 0);
 static int hardsect_size = 512;
 module_param(hardsect_size, int, 0);
-static int nsectors = 1024;	/* How big the drive is */
+static int nsectors = 0x1000;	/* How big the drive is */
 module_param(nsectors, int, 0);
 
 /*
@@ -55,7 +44,7 @@ struct sbull_dev {
         struct timer_list timer;        /* For simulated media changes */
 };
 
-#if 0
+#if 1
 static struct sbull_dev *Device = NULL;
 
 /*
@@ -64,6 +53,7 @@ static struct sbull_dev *Device = NULL;
 static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
 		unsigned long nsect, char *buffer, int write)
 {
+#if 0
 	unsigned long offset = sector*KERNEL_SECTOR_SIZE;
 	unsigned long nbytes = nsect*KERNEL_SECTOR_SIZE;
 
@@ -75,6 +65,8 @@ static void sbull_transfer(struct sbull_dev *dev, unsigned long sector,
 		memcpy(dev->data + offset, buffer, nbytes);
 	else
 		memcpy(buffer, dev->data + offset, nbytes);
+#endif
+	PKL("  xfer sector %lx nr %lx", sector, nsect);
 }
 
 /*
@@ -104,12 +96,15 @@ static int sbull_xfer_request(struct sbull_dev *dev, struct request *req)
 {
 	struct bio *bio;
 	int nsect = 0;
-
+#if 0
 	__rq_for_each_bio(bio, req) {
 		sbull_xfer_bio(dev, bio);
 		nsect += bio->bi_size/KERNEL_SECTOR_SIZE;
 	}
 	return nsect;
+#else
+	return 	(int)blk_rq_sectors(req);
+#endif
 }
 
 /*
@@ -129,10 +124,10 @@ static void sbull_full_request(struct request_queue *q)
 		}
 		sectors_xferred = sbull_xfer_request(dev, req);
 		PKL("request sector %lx nr %x xfered %x",
-			blk_rq_pos(req),
-			blk_rq_sectors(req),
+			(unsigned long)blk_rq_pos(req),
+			(int)blk_rq_sectors(req),
 			sectors_xferred);
-		__blk_end_request(req, 0, sectors_xferred);
+		blk_end_request(req, 0, sectors_xferred);
 	}
 }
 
@@ -147,6 +142,7 @@ static int sbull_open(struct block_device *bdev, fmode_t mode)
 	spin_lock(&dev->lock);
 	dev->users++;
 	spin_unlock(&dev->lock);
+        PKL("open %d", dev->users);
 	return 0;
 }
 
@@ -157,6 +153,7 @@ static void sbull_release(struct gendisk *disk, fmode_t mode)
 	spin_lock(&dev->lock);
 	dev->users--;
 	spin_unlock(&dev->lock);
+        PKL("release %d", dev->users);
 
 	return;
 }
@@ -170,6 +167,7 @@ static void sbull_release(struct gendisk *disk, fmode_t mode)
 int sbull_ioctl (struct block_device *bdev, fmode_t mode,
                  unsigned int cmd, unsigned long arg)
 {
+	PKL("ioctl");
 	return -ENOTTY; /* unknown command */
 }
 
@@ -213,7 +211,7 @@ static void setup_device(struct sbull_dev *dev)
 	/*
 	 * And the gendisk structure.
 	 */
-	dev->gd = alloc_disk(1);
+	dev->gd = alloc_disk(16);
 	if (! dev->gd) {
 		printk (KERN_NOTICE "alloc_disk failure\n");
 		goto out_vfree;
@@ -223,8 +221,10 @@ static void setup_device(struct sbull_dev *dev)
 	dev->gd->fops = &sbull_ops;
 	dev->gd->queue = dev->queue;
 	dev->gd->private_data = dev;
-	snprintf (dev->gd->disk_name, 32, "sbull%c", 'a');
+	dev->gd->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
+	snprintf (dev->gd->disk_name, 32, "sbull0");
 	set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
+	PKL("capacity %x", nsectors);
 	add_disk(dev->gd);
 	return;
 
@@ -241,7 +241,7 @@ static int __init sbull_init(void)
 	/*
 	 * Get registered.
 	 */
-#if 0
+#if 1
 	sbull_major = register_blkdev(sbull_major, "sbull");
 	if (sbull_major <= 0) {
 		PKL("blk device registration failed\n");
@@ -260,7 +260,7 @@ static int __init sbull_init(void)
 
 	return 0;
 
-#if 0
+#if 1
   out_unregister:
 	unregister_blkdev(sbull_major, "sbull");
 	return -ENOMEM;
@@ -269,7 +269,7 @@ static int __init sbull_init(void)
 
 static void sbull_exit(void)
 {
-#if 0
+#if 1
 	struct sbull_dev *dev = Device;
 
 	if (dev->gd) {

@@ -16,12 +16,9 @@ mode="777"
 rm -f /dev/${device}0
 
 # retrieve major number
-#major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
+major=$(awk "\$2==\"$module\" {print \$1}" /proc/devices)
 
 # for simpicity, hardcode the major number
-mknod /dev/${device}0 b 577 0
+#mknod /dev/${device}0 b ${major} 0
 
-#ln -sf ${device}0 /dev/${device}
-#chgrp $group /dev/${device}[0-3]
-#chmod $mode  /dev/${device}[0-3]
 
