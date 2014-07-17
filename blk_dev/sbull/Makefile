@@ -12,7 +12,7 @@ EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= brd_test.o
+obj-m	:= sbull.o
 
 else
 
@@ -25,6 +25,8 @@ clean:
 	$(MAKE) -C $(KERNELDIR) M=$(PWD) LDDINC=$(PWD) clean
 
 endif
+
+
 
 
 depend .depend dep:
