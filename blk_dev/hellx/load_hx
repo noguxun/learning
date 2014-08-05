@@ -1,0 +1,9 @@
+#!/bin/sh
+
+sudo insmod hellx.ko
+sudo mkfs -t ext3 /dev/hellx
+mkdir -p ~/mnt/hellx
+sudo mount -t ext3 /dev/hellx ~/mnt/hellx/
+
+
+

@@ -1,0 +1,5 @@
+#!/bin/sh
+
+sudo umount ~/mnt/hellx
+sudo rmmod hellx.ko
+

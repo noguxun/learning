@@ -150,28 +150,12 @@ static void hx_release(struct gendisk *disk, fmode_t mode)
 /*
  * The ioctl() implementation
  */
-
 int hx_ioctl (struct block_device *bdev, fmode_t mode,
                  unsigned int cmd, unsigned long arg)
 {
 	PKL("ioctl cmd %x", cmd);
 	return -ENOTTY; /* unknown command */
 }
-
-
-int hx_getgeo(struct block_device *bdev, struct hd_geometry *geo)
-{
-	long size = nsectors;
-
-	geo->cylinders = (size & ~0x3f) >> 6;
-	geo->heads = 4;
-	geo->sectors = 16;
-	//geo.start = 4;
-	PKL("getgeo");
-
-	return 0;
-}
-
 
 
 /*
@@ -182,7 +166,6 @@ static struct block_device_operations hx_ops = {
 	.open 	         = hx_open,
 	.release 	 = hx_release,
 	.ioctl	         = hx_ioctl,
-	.getgeo          = hx_getgeo,
 };
 
 
@@ -213,7 +196,7 @@ static void setup_device(struct hx_dev *dev)
 	/*
 	 * And the gendisk structure.
 	 */
-	dev->gd = alloc_disk(16);
+	dev->gd = alloc_disk(1);
 	if (! dev->gd) {
 		printk (KERN_NOTICE "alloc_disk failure\n");
 		goto out_vfree;
@@ -223,8 +206,11 @@ static void setup_device(struct hx_dev *dev)
 	dev->gd->fops = &hx_ops;
 	dev->gd->queue = dev->queue;
 	dev->gd->private_data = dev;
-	dev->gd->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
-	snprintf (dev->gd->disk_name, 32, "hx");
+	/*
+	 * Not needed?
+	 * dev->gd->flags |= GENHD_FL_SUPPRESS_PARTITION_INFO;
+	 */
+	snprintf (dev->gd->disk_name, 32, "hellx");
 	set_capacity(dev->gd, nsectors*(hardsect_size/KERNEL_SECTOR_SIZE));
 	PKL("capacity %x", nsectors);
 	add_disk(dev->gd);

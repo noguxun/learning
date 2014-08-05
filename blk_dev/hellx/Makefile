@@ -12,7 +12,7 @@ EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= bull.o
+obj-m	:= hellx.o
 
 else
 
