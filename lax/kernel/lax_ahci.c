@@ -11,6 +11,7 @@
 #include <asm-generic/dma-coherent.h>
 
 #include "lax_common.h"
+#include "lax_share.h"
 #include "lax_ahci.h"
 
 
@@ -20,10 +21,12 @@
  *
  */
 
-static void ahci_port_init(void);
-static void ahci_port_deinit(void);
-
+static void ahci_port_init(bool);
+static void ahci_port_deinit(bool);
 static struct lax_ahci lax = { NULL, NULL };
+
+static void ahci_exec_cmd_nodata(struct lax_ata_direct *arg);
+
 
 static struct lax_port *get_port(void)
 {
@@ -160,7 +163,6 @@ static unsigned int ahci_fill_sg(unsigned int tag, u32 size, u32 direction)
 	sg_base = cmd_tbl + AHCI_CMD_TBL_HDR_SZ;
 	while(true) {
 		unsigned long len;
-
 		len = LAX_SG_ENTRY_SIZE;
 		if(size < len) {
 			len = size;
@@ -248,6 +250,7 @@ static void ahci_cmd_prep_rw(const struct ata_taskfile *tf, unsigned int tag,
 {
 	void * cmd_tbl;
 	unsigned int n_elem;
+
 	const u32 cmd_fis_len = 5; /* five dwords */
 	u32 opts;
 	struct lax_port *port = get_port();
@@ -306,8 +309,8 @@ static bool ahci_busy_wait_not(u32 wait_msec, void __iomem *reg, u32 mask, u32 v
 	} while (i < wait_msec);
 
 	if(!condition){
-		PK( "wait failed on %d msec wait, reg_val %x mask %x, val %x i %d wait %d\n",
-			wait_msec, reg_val, mask, val, i, wait_msec );
+		//PK( "wait failed on %d msec wait, reg_val %x mask %x, val %x i %d wait %d\n",
+		//	wait_msec, reg_val, mask, val, i, wait_msec );
 	  	return false;
 	}
 	else {
@@ -345,7 +348,7 @@ static void ahci_port_enable_fis_recv(void)
 	u32  cap, tmp;
 	struct lax_port *port = get_port();
 
-	cap = ioread32(lax.iohba_base + HOST_CAP);
+	cap = ioread32(H(HOST_CAP));
 
 	/* enable fis reception */
 	/* set FIS registers */
@@ -363,11 +366,10 @@ static void ahci_port_enable_fis_recv(void)
 	tmp = ioread32(P(PORT_CMD));
 	tmp |= PORT_CMD_FIS_RX;
 	iowrite32(tmp, P(PORT_CMD));
+
 	/* flush */
 	ioread32(P(PORT_CMD));
 }
-
-
 
 static u32 ahci_get_ata_command(unsigned long flags, u32 *pOpt)
 {
@@ -408,55 +410,124 @@ END:
 	if(pOpt && (flags & LAX_RW_FLAG_RW) != 0) {
 		*pOpt |= AHCI_CMD_WRITE;
 	}
-	return cmd;
 
+	return cmd;
 }
 
-
-
-static void ahci_exec_cmd_pio_data_in_out(u8 command, u16 feature, u64 lba, u16 block, u32 direction)
+static void ahci_exec_cmd_pio_data_inout(struct lax_ata_direct *arg)
 {
 	unsigned int tag = 0;
 	struct ata_taskfile tf;
 	u32 bit_pos = 1 << tag;
+	u32 wait_count;
+	u32 cmdopts = 0;
+	unsigned int direction;
 
-	VPK("exec command 0x%x feature 0x%x, lba 0x%llx block 0x%x direction %d\n",
-		command, feature, lba, block, direction);
+	VPK("exec PIO cmd, issue reg 0x%x, tag %d, command %x feature %x block %x lba %llx\n",
+		bit_pos, tag, arg->ata_cmd, arg->feature, arg->block, arg->lba);
 
 	ahci_tf_init(&tf);
-	ahci_fill_tf(command, feature, lba, block, &tf, false);
+	ahci_fill_tf(arg->ata_cmd, arg->feature, arg->lba, arg->block, &tf, false);
 
-	ahci_cmd_prep_rw(&tf, tag, 0, block, direction);
+
+	if(arg->ata_cmd_type == LAX_CMD_TYPE_PIO_OUT || arg->ata_cmd_type == LAX_CMD_TYPE_DMA_OUT) {
+		cmdopts |= AHCI_CMD_WRITE;
+		direction = LAX_WRITE;
+	}
+	else {
+		direction = LAX_READ;
+	}
+
+	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg->buf_len, direction);
 
 	/* issue command */
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
 
 	/* wait command complete */
-	if(ahci_busy_wait_not(100, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == false) {
-		printk(KERN_ERR "timeout exec command 0x%x\n", command);
-		return;
+	for (wait_count = 100; wait_count > 0; wait_count-- ) {
+		if(ahci_busy_wait_not(10, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == true) {
+			break;
+		}
+
+		/* Check if taskfile error enable is set or not, if set, we got an error */
+		if((ioread32(P(PORT_IRQ_STAT)) & 0x40000000) !=0) {
+			printk(KERN_ERR "timeout exec command 0x%x Issue error\n", arg->ata_cmd);
+			p_regs();
+			break;
+		}
 	}
 
 	ahci_port_clear_irq();
 	ahci_port_clear_sata_err();
 }
 
-static void ahci_exec_cmd_id(void)
+
+static void ahci_exec_cmd_dl_micro_code(u16 len_in_block)
 {
-	ahci_exec_cmd_pio_data_in_out(ATA_CMD_ID_ATA, 0xFF00, 0x00, 1, 0);
+	u16 block = len_in_block & 0x00FF;
+	u64 lba = ( len_in_block >> 8 ) & 0x00FF;
+	u16 feature = 0x07;
+	unsigned int tag = 0;
+	struct ata_taskfile tf;
+	u32 bit_pos = 1 << tag;
+	u32 wait_count;
+
+
+	VPK("Downloading Microcode of block size %d\n", len_in_block);
+
+	ahci_tf_init(&tf);
+	ahci_fill_tf(ATA_CMD_DOWNLOAD_MICRO, feature, lba, block, &tf, false);
+
+	ahci_cmd_prep_rw(&tf, tag, AHCI_CMD_WRITE, len_in_block, LAX_WRITE);
+
+	/* issue command */
+	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
+
+	/* wait command complete */
+	/* TODO: check interrupt's error state */
+	for (wait_count = 300; wait_count > 0; wait_count-- ) {
+		if(ahci_busy_wait_not(10, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == true) {
+			VPK("Downloading done\n");
+			break;
+		}
+
+		/* Check if taskfile error enable is set or not, if set, we got an error */
+		if((ioread32(P(PORT_IRQ_STAT)) & 0x40000000) !=0) {
+			printk(KERN_ERR "timeout exec command download micro code Issue error\n");
+			p_regs();
+			break;
+		}
+	}
+
+	ahci_port_clear_irq();
+	ahci_port_clear_sata_err();
 }
 
-static void ahci_exec_cmd_dl_micro_code(u16 block)
+static void ahci_exec_cmd_ata_direct(unsigned long uarg)
 {
-	u16 b = block & 0x00FF;
-	u64 lba = ( block >> 8 ) & 0x00FF;
-	ahci_exec_cmd_pio_data_in_out(ATA_CMD_DOWNLOAD_MICRO, 0x00, lba, b, 1);
+	struct lax_ata_direct arg;
+
+	copy_from_user(&arg, (void *)uarg, sizeof(struct lax_ata_direct));
+
+	VPK("ata_direct type %d\n", arg.ata_cmd_type);
+
+	switch(arg.ata_cmd_type){
+	case LAX_CMD_TYPE_NO_DATA:
+		ahci_exec_cmd_nodata(&arg);
+		break;
+	case LAX_CMD_TYPE_PIO_IN:
+		ahci_exec_cmd_pio_data_inout(&arg);
+		break;
+	default:
+		break;
+	}
 }
 
 static void ahci_exec_cmd_rw(unsigned long uarg)
 {
 	unsigned int tag = 0;
 	struct lax_rw arg;
+
 	struct ata_taskfile tf;
 	u32 bit_pos = 1 << tag;
 	u32 cmdopts = 0;
@@ -464,6 +535,7 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	u8 command;
 	unsigned int direction;
 	bool ncq;
+	u32 wait_count;
 
 	copy_from_user(&arg, (void *)uarg, sizeof(struct lax_rw));
 
@@ -482,7 +554,9 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	ahci_fill_tf(command, 0x00, arg.lba, arg.block, &tf, ncq);
 
 	direction = ((arg.flags & LAX_RW_FLAG_RW) == 0)? LAX_READ : LAX_WRITE;
+
 	ahci_cmd_prep_rw(&tf, tag, cmdopts, arg.block, direction);
+	VPK("rw command direction is %x", direction);
 
 	/* issue command */
 	if(ncq) {
@@ -490,13 +564,32 @@ static void ahci_exec_cmd_rw(unsigned long uarg)
 	}
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
 
+	/* TODO: feel it Ugly */
 	/* wait completion*/
-	if(ahci_busy_wait_not(1000, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == false) {
-		printk(KERN_ERR "timeout exec command 0x%x\n", command);
+	for (wait_count = 100; wait_count > 0; wait_count-- ) {
+		if(ahci_busy_wait_not(10, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == true) {
+			break;
+		}
+
+		/* Check if taskfile error enable is set or not, if set, we got an error */
+		if((ioread32(P(PORT_IRQ_STAT)) & 0x40000000) !=0) {
+			printk(KERN_ERR "timeout exec command 0x%x Issue error\n", command);
+			p_regs();
+			break;
+		}
 	}
 
-	if(ncq && ahci_busy_wait_not(1000, P(PORT_SCR_ACT), bit_pos, bit_pos) == false) {
-		printk(KERN_ERR "timeout exec command 0x%x\n", command);
+	for (wait_count = 100; wait_count > 0; wait_count-- ) {
+		if(ncq && ahci_busy_wait_not(10, P(PORT_SCR_ACT), bit_pos, bit_pos) == true) {
+			break;
+		}
+
+		/* Check if taskfile error enable is set or not, if set, we got an error */
+		if((ioread32(P(PORT_IRQ_STAT)) & 0x40000000) !=0) {
+			printk(KERN_ERR "timeout exec command 0x%x Issue error\n", command);
+			p_regs();
+			break;
+		}
 	}
 
 	/* copy task file data to user space */
@@ -510,23 +603,24 @@ END:
 }
 
 
-static void ahci_exec_nodata(unsigned int tag, u8 command, u16 feature)
+static void ahci_exec_cmd_nodata(struct lax_ata_direct *arg)
 {
+	unsigned int tag = 0;
 	struct ata_taskfile tf;
 	u32 bit_pos = 1 << tag;
 
-	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x\n",
-		bit_pos, tag, command, feature);
+	VPK("exec cmd, issue reg 0x%x, tag %d, command %x feature %x block %x lba %llx\n",
+		bit_pos, tag, arg->ata_cmd, arg->feature, arg->block, arg->lba);
 
 	ahci_tf_init(&tf);
-	ahci_fill_tf(command, feature, 0, 0, &tf, false);
+	ahci_fill_tf(arg->ata_cmd, arg->feature, arg->lba, arg->block, &tf, false);
 
 	ahci_cmd_prep_nodata(&tf, tag, AHCI_CMD_CLR_BUSY);
 
 	iowrite32(bit_pos, P(PORT_CMD_ISSUE));
 
 	if(ahci_busy_wait_not(100, P(PORT_CMD_ISSUE), bit_pos, bit_pos) == false) {
-		printk(KERN_ERR "timeout exec command 0x%x\n", command);
+		printk(KERN_ERR "timeout exec command 0x%x\n", arg->ata_cmd);
 	}
 
 	ahci_port_clear_irq();
@@ -574,7 +668,7 @@ static void ahci_port_spin_up(void)
 {
 	u32 cmd, cap;
 
-	cap = ioread32(lax.iohba_base + HOST_CAP);
+	cap = ioread32(H(HOST_CAP));
 
 	/* spin up if supports staggered spin up, this is normally not supported
 	 * on the pc
@@ -657,6 +751,11 @@ static void ahci_port_sg_free(void)
 		dma_free_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
 				port->sg[0][i].mem, port->sg[0][i].mem_dma);
 	}
+
+	for(i = 0; i < LAX_SG_COUNT; i++) {
+		dma_free_coherent(&(lax.pdev->dev), LAX_SG_ENTRY_SIZE,
+				port->sg[1][i].mem, port->sg[1][i].mem_dma);
+	}
 }
 
 static int ahci_port_mem_alloc(void)
@@ -724,7 +823,7 @@ static void ahci_port_reset_hard(void)
 	u32 tmp;
 	int tries = ATA_LINK_RESUME_TRIES;
 
-	ahci_port_deinit();
+	ahci_port_deinit(false);
 
 	/* setting HBA to idle */
 	tmp = ioread32(P(PORT_CMD));
@@ -781,11 +880,11 @@ static void ahci_port_reset_hard(void)
 		VPK("reset idle verify failed\n");
 	}
 
-	ahci_port_init();
+	ahci_port_init(false);
 }
 
 
-static void ahci_port_init(void)
+static void ahci_port_init(bool alloc_mem)
 {
 	u32 tmp;
 	u32 flags;
@@ -817,7 +916,9 @@ static void ahci_port_init(void)
 	}
 
 	/* now start real init process*/
-	ahci_port_mem_alloc();
+	if(alloc_mem){
+		ahci_port_mem_alloc();
+	}
 	ahci_port_spin_up(); /* may be this is not needed */
 	ahci_port_enable_fis_recv();
 
@@ -832,11 +933,13 @@ static void ahci_port_init(void)
 	} ahci_port_engine_start();
 }
 
-static void ahci_port_deinit(void)
+static void ahci_port_deinit(bool free_mem)
 {
 	if(lax.port_initialized == true) {
 		lax.port_initialized = false;
-		ahci_port_mem_free();
+		if(free_mem) {
+			ahci_port_mem_free();
+		}
 	}
 }
 
@@ -847,30 +950,33 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 
 	printk(KERN_INFO "ioctl cmd 0x%x arg 0x%lx \n", cmd, arg);
 
-	if (cmd == LAX_CMD_TST_VU_2B) {
-		/* only support VU command */
-		ahci_exec_nodata(0, 0xFF, 0x2B);
+	if (cmd == LAX_CMD_RSVD1) {
+		// A place holder for future
 	}
-	else if(cmd == LAX_CMD_TST_PORT_INIT) {
-		ahci_port_init();
+	else if(cmd == LAX_CMD_PORT_INIT) {
+		// To be removed
 	}
-	else if(cmd == LAX_CMD_TST_PRINT_REGS) {
+	else if(cmd == LAX_CMD_PRINT_REGS) {
 		p_regs();
 	}
-	else if(cmd == LAX_CMD_TST_PORT_RESET) {
+	else if(cmd == LAX_CMD_PORT_RESET) {
 		ahci_port_reset_hard();
 	}
-	else if(cmd == LAX_CMD_TST_ID) {
-		ahci_exec_cmd_id();
+	else if(cmd == LAX_CMD_ID) {
+		// ahci_exec_cmd_id();
+		// No more supported, should go to direct ata cmd interface
 	}
-	else if(cmd == LAX_CMD_TST_RESTORE_IRQ) {
+	else if(cmd == LAX_CMD_RESTORE_IRQ) {
 		ahci_port_restore_irq_mask();
 	}
-	else if(cmd == LAX_CMD_TST_RW) {
+	else if(cmd == LAX_CMD_RW) {
 		ahci_exec_cmd_rw(arg);
 	}
-	else if(cmd == LAX_CMD_TST_MICRO_CODE) {
+	else if(cmd == LAX_CMD_MICRO_CODE) {
 		ahci_exec_cmd_dl_micro_code((u16)arg);
+	}
+	else if(cmd == LAX_CMD_ATA_DIRECT) {
+		ahci_exec_cmd_ata_direct(arg);
 	}
 	else {
 		printk(KERN_WARNING "not supported command 0x%x ", cmd);
@@ -880,46 +986,48 @@ long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	return retval;
 }
 
-
 int ahci_file_open(struct inode *inode, struct file *filp)
 {
-	ahci_port_init();
+	ahci_port_init(true);
 	return 0;
 }
-
 
 int ahci_file_release(struct inode *inode, struct file *filp)
 {
-	ahci_port_deinit();
+	ahci_port_deinit(true);
 	return 0;
 }
 
-void ahci_module_init(int port_i)
+bool ahci_module_init(int ata_bus_index, int ata_port_index)
 {
 	struct pci_dev *pdev = NULL;
-	bool found = false;
 	void __iomem * const * iomap;
 	struct lax_port *port;
 
-	lax.port_index = port_i;
+	lax.port_index = ata_port_index;
+	lax.pdev = NULL;
 	port = get_port();
 
 	for_each_pci_dev(pdev) {
 		u16 class = pdev->class >> 8;
 
 		if (class == PCI_CLASS_STORAGE_RAID || class == PCI_CLASS_STORAGE_SATA) {
-			found = true;
-			VPK("found AHCI PCI controller, class type 0x%x\n", class);
+			VPK("found AHCI PCI controller, class type 0x%x, %2.2x:%2.2x:%2.2x \n",
+				class, pdev->bus->number, PCI_SLOT(pdev->devfn), PCI_FUNC(pdev->devfn) );
+
+			if(ata_bus_index != pdev->bus->number){
+				continue;
+			}
+
+			lax.pdev = pdev;
 		 	break;
 		}
 	}
 
-	if(found == false) {
+	if(lax.pdev == NULL) {
 		VPK("AHCI device NOT found \n");
-		return;
+		return false;
 	}
-
-	lax.pdev = pdev;
 
 	iomap = pcim_iomap_table(lax.pdev);
 	lax.iohba_base = iomap[AHCI_PCI_BAR_STANDARD];
@@ -928,7 +1036,29 @@ void ahci_module_init(int port_i)
 	port->ioport_base = lax.iohba_base + 0x100 + (lax.port_index * 0x80);
 	port->cmd_slot = NULL;
 
-	VPK("iohba base address %p", lax.iohba_base);
+	if(lax.pdev->bus->number != 0) {
+		u32 ctrl, ctrl_org;
+		ctrl_org = ioread32(H(HOST_CTL));
+
+		/* reset */
+		ctrl = ctrl_org | 0x00000001;
+		iowrite32(ctrl, H(HOST_CTL));
+		ahci_busy_wait_not(100, H(HOST_CTL), 0x00000001, 0x00000001);
+
+		/* enable the AHCI */
+		ctrl = ctrl_org | 0x80000000;
+		iowrite32(ctrl, H(HOST_CTL));
+		/* disable AHCI interrupt */
+		ctrl &= 0xfffffffd;
+		iowrite32(ctrl, H(HOST_CTL));
+	}
+
+	p_regs();
+
+	printk(KERN_INFO "Will work on PCI device %2.2x:%2.2x:%2.2x, port %2.2x ",
+		lax.pdev->bus->number, PCI_SLOT(lax.pdev->devfn), PCI_FUNC(lax.pdev->devfn), lax.port_index);
+
+	return true;
 }
 
 void ahci_module_deinit(void)
@@ -948,7 +1078,7 @@ static void ahci_vma_close(struct vm_area_struct *vma)
 
 
 static int ahci_vma_nopage(struct vm_area_struct *vma, struct vm_fault *vmf)
-{
+ {
 	unsigned long offset_in_file;
 	int retval = VM_FAULT_NOPAGE;
 	int sg_index;
@@ -993,14 +1123,11 @@ out:
 	return retval;
 }
 
-
 struct vm_operations_struct ahci_vm_ops = {
 	.open  = ahci_vma_open,
 	.close = ahci_vma_close,
 	.fault = ahci_vma_nopage,
 };
-
-
 
 int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma)
 {

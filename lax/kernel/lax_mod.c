@@ -10,15 +10,20 @@
 #include "lax_common.h"
 #include "lax_ahci.h"
 
+/* bus index, could have more than one controller,
+ * usually 0 is on the mother board, 3 is PCIe controller
+ */
+static int ata_bus_index = 3;
 
-/* Default is likely to be /dev/sdb */
-static int ata_ctl_index = 0;    /* controller index, could have more than one controller */
-static int ata_port_index = 1;   /* port index of the selected controller */
+/* port index of the selected controller,
+ * usually 0 is used for Linux OS, 1 is used for next
+ */
+static int ata_port_index = 1;
 
 static int ata_lax_major = 0;
 static int ata_lax_minor = 0;
 
-module_param(ata_ctl_index, int, 0);
+module_param(ata_bus_index, int, 0);
 module_param(ata_port_index, int, 0);
 module_param(ata_lax_major, int, 0);
 module_param(ata_lax_minor, int, 0);
@@ -65,7 +70,10 @@ static int ata_lax_init_module(void)
 		printk(KERN_WARNING "Cannot add ata lax major %d\n", ata_lax_major);
 	}
 
-	ahci_module_init(ata_port_index);
+	if(ahci_module_init(ata_bus_index, ata_port_index) != true) {
+		printk(KERN_ALERT "ATA LAX Module Failed, wrong bus index? \n");
+		return -ENOENT;
+	}
 
 	printk(KERN_ALERT "Hello, ATA LAX Module loaded\n");
 

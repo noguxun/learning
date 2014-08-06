@@ -1,33 +1,6 @@
 #ifndef _LAX_AHCI_H
 #define _LAX_AHCI_H
 
-void ahci_module_init(int port_i);
-void ahci_module_deinit(void);
-long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
-int ahci_file_open(struct inode *inode, struct file *filp);
-int ahci_file_release(struct inode *inode, struct file *filp);
-int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma);
-
-enum {
-	LAX_CMD_TST_START = 0x101,
-	LAX_CMD_TST_PORT_INIT,
-	LAX_CMD_TST_VU_2B,
-	LAX_CMD_TST_PRINT_REGS,
-	LAX_CMD_TST_PORT_RESET,
-	LAX_CMD_TST_ID,
-	LAX_CMD_TST_RW,
-	LAX_CMD_TST_RESTORE_IRQ,
-	LAX_CMD_TST_MICRO_CODE,
-
-	LAX_RW_FLAG_NCQ             = (unsigned long)(1 << 2), /* None-NCQ 0, NCQ 1*/
-	LAX_RW_FLAG_XFER_MODE       = (unsigned long)(1 << 1), /* PIO 0,  DMA 1 */
-	LAX_RW_FLAG_RW              = (unsigned long)(1 << 0), /* READ 0, WRITE 1*/
-
-	LAX_READ                    = 0,
-	LAX_WRITE                   = 1,
-
-};
-
 enum {
 	AHCI_PCI_BAR_STANDARD = 5,
 
@@ -150,7 +123,8 @@ enum {
 #define LAX_SG_COUNT          (8l)    /* 32M/4M */
 #define LAX_SG_ALL_SIZE       ((LAX_SG_COUNT) * (LAX_SG_ENTRY_SIZE))
 #define LAX_SECTOR_SIZE       (512l)
-#define P(port)               ((lax.ports[lax.port_index].ioport_base) + (port))
+#define P(port_reg)           ((lax.ports[lax.port_index].ioport_base) + (port_reg))
+#define H(host_reg)           ((lax.iohba_base) + (host_reg))
 
 #define port_reg_print(reg) \
 {\
@@ -173,14 +147,6 @@ struct ahci_cmd_hdr {
 	__le32			tbl_addr_hi;
 	__le32			reserved[4];
 };
-
-struct lax_rw {
-	uint64_t lba;
-	uint16_t block;
-	uint32_t flags;
-	uint32_t tfd;
-};
-
 
 struct lax_sg {
 	void *mem;
@@ -212,6 +178,7 @@ struct lax_ahci {
 	bool port_initialized;
 };
 
+
 union u64_b {
 	u64  data;
 	u8   b[8];
@@ -227,5 +194,12 @@ union u16_b {
 	u8   b[4];
 };
 
+
+bool ahci_module_init(int ata_bus_index, int ata_port_index);
+void ahci_module_deinit(void);
+long ahci_file_ioctl(struct file *filp, unsigned int cmd, unsigned long arg);
+int ahci_file_open(struct inode *inode, struct file *filp);
+int ahci_file_release(struct inode *inode, struct file *filp);
+int ahci_file_mmap(struct file *filp, struct vm_area_struct *vma);
 
 #endif

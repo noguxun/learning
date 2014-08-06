@@ -1,0 +1,30 @@
+
+HOW TO SETUP
+----------------------------------------
+cd lax_dir
+./setup.sh
+
+(It is need only ONCE)
+
+
+
+HOW TO RUN LAX GUI TOOL
+----------------------------------------
+01. Mount windows PC folder (once at every Linux reboot) 
+  This is optional, needed when you want to download microcode from LAX
+  cd lax_dir/app
+  edit mount_win.sh, setup your: PC name, username, password
+  ./mount_win.sh
+
+02. run gui test tool
+  cd lax_dir
+  python3 start.sh
+
+
+
+HOW TO RUN TESTING SCRIPT
+----------------------------------------
+  cd lax_dir/app
+  python3 t001_read_4k.py
+  python3 t002_print_regs.py
+  ...
