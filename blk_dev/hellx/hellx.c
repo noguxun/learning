@@ -38,7 +38,8 @@ static int nsectors = 0x100000;	/* How big the drive is */
 struct hx_dev {
         int size;                       /* Device size in sectors */
         u8 *data;                       /* The data array */
-        spinlock_t lock;                /* For mutual exclusion */
+        spinlock_t rq_lock;             /* For block request queue */
+	struct mutex lock;              /* For driver data */
         struct request_queue *queue;    /* The device request queue */
         struct gendisk *gd;             /* The gendisk structure */
 	struct workqueue_struct *wq;    /* The work queue */
@@ -120,9 +121,15 @@ static int hx_open(struct block_device *bdev, fmode_t mode)
 {
 	struct hx_dev *dev = bdev->bd_disk->private_data;
 
-	spin_lock(&dev->lock);
-	spin_unlock(&dev->lock);
+	mutex_lock(&dev->lock);
+
+	/*
+	 * shall we doing something here?
+	 */
+
+	mutex_unlock(&dev->lock);
         PKL("open");
+
 	return 0;
 }
 
@@ -130,9 +137,15 @@ static void hx_release(struct gendisk *disk, fmode_t mode)
 {
 	struct hx_dev *dev = disk->private_data;
 
-	spin_lock(&dev->lock);
-	spin_unlock(&dev->lock);
-        PKL("release");
+	mutex_lock(&dev->lock);
+
+	/*
+	 * shall we doing something here?
+	 */
+
+	mutex_unlock(&dev->lock);
+
+ 	PKL("release");
 
 	return;
 }
@@ -184,7 +197,17 @@ static void hx_work(struct work_struct *work)
 int hx_ioctl (struct block_device *bdev, fmode_t mode,
                  unsigned int cmd, unsigned long arg)
 {
+	struct hx_dev *dev = bdev->bd_disk->private_data;
+	mutex_lock(&dev->lock);
+
+	/*
+	 * shall we doing something here?
+	 */
+
+	mutex_unlock(&dev->lock);
+
 	PKL("ioctl cmd %x", cmd);
+
 	return -ENOTTY; /* unknown command */
 }
 
@@ -253,9 +276,10 @@ static int setup_device(struct hx_dev *dev)
 	/*
 	 * Init the lock used by request queue
 	 */
-	spin_lock_init(&dev->lock);
+	mutex_init(&dev->lock);
+	spin_lock_init(&dev->rq_lock);
 
-	dev->queue = blk_init_queue(hx_request, &dev->lock);
+	dev->queue = blk_init_queue(hx_request, &dev->rq_lock);
 	if (dev->queue == NULL) {
 		ret = -ENOMEM;
 		goto END;
