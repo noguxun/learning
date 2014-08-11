@@ -285,8 +285,17 @@ static int setup_device(struct hx_dev *dev)
 		goto END;
 	}
 
+	/*
+	 * Place Holder, We can change the schedule like below if needed
+	ret = elevator_change(dev->queue, "noop");
+	if (ret) {
+		PKL("Failed to change request queue's scheduler");
+		goto END;
+	}
+
 	blk_queue_logical_block_size(dev->queue, hardsect_size);
 	dev->queue->queuedata = dev;
+	*/
 
 	/*
 	 * And the gendisk structure.
