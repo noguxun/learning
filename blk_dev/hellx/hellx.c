@@ -5,7 +5,6 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
-
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/fs.h>
@@ -13,6 +12,7 @@
 #include <linux/bio.h>
 #include <linux/hdreg.h>
 #include <linux/workqueue.h>
+#include <linux/platform_device.h>
 
 MODULE_LICENSE("GPL");
 
@@ -327,7 +327,7 @@ static int setup_device(struct hx_dev *dev)
 }
 
 
-static int __init hx_init(void)
+static int hx_do_init(void)
 {
 	/*
 	 * Get registered.
@@ -354,7 +354,7 @@ static int __init hx_init(void)
 	return -ENOMEM;
 }
 
-static void hx_exit(void)
+static void hx_do_exit(void)
 {
 	struct hx_dev *dev = Device;
 
@@ -362,6 +362,72 @@ static void hx_exit(void)
 	unregister_blkdev(hx_major, "hx");
 	kfree(Device);
 	PKL("exit");
+}
+
+#if 0
+static irqreturn_t hx_irq_handler(int irq, void *dev_id)
+{
+	/*
+	 * Handling interrupt here
+	 */
+
+	return IRQ_HANDLED;
+}
+#endif
+
+static int hx_probe(struct platform_device *plat_dev)
+{
+	int err = 0;
+#if 0
+	err = hx_do_init();
+	{
+		int irq;
+		irq = platform_get_irq(plat_dev, 0);
+		// TODO: should put device data here
+		request_irq(irq, hx_irq_handler,
+			IRQF_TRIGGER_RISING,
+			"hellx_disk", NULL);
+	}
+#endif
+	return err;
+}
+
+
+static int hx_remove(struct platform_device *plat_dev)
+{
+#if 0
+	hx_do_exit();
+#endif
+	return 0;
+}
+
+static struct platform_driver hellx_driver = {
+	.probe = hx_probe,
+	.remove = hx_remove,
+	.driver = {
+		.name = "hellx_disk",
+		.owner = THIS_MODULE,
+	}
+};
+
+static int __init hx_init(void)
+{
+	int err = 0;
+	err = hx_do_init();
+	if(0) {
+		platform_driver_register(&hellx_driver);
+	}
+
+	return err;
+}
+
+static void __exit hx_exit(void)
+{
+#if 1
+	hx_do_exit();
+#else
+	platform_driver_unregister(*hellx_dirver);
+#endif
 }
 
 module_init(hx_init);
