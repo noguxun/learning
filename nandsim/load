@@ -1,0 +1,11 @@
+#!/bin/sh
+
+# Load needed dependency module
+sudo modprobe mtd
+sudo modprobe nand
+
+# Insert my nand simulation, with 64MiB
+# see http://www.linux-mtd.infradead.org/faq/ubi.html
+sudo insmod mynandsim.ko second_id_byte=0x36
+
+
