@@ -1,8 +1,0 @@
-#!/bin/sh
-
-sudo rmmod mynandsim.ko
-sudo rmmod nand
-sudo rmmod mtd
-
-
-

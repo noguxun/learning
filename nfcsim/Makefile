@@ -12,7 +12,7 @@ EXTRA_CFLAGS += $(DEBFLAGS) -I$(LDDINC)
 
 ifneq ($(KERNELRELEASE),)
 
-obj-m	:= mynandsim.o
+obj-m	:= nfcsim.o
 
 else
 
