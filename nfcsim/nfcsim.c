@@ -51,6 +51,9 @@
 #define PK(fmt, args...)  printk(KERN_INFO "nfc: " fmt, ##args )
 #define PKL(fmt, args...) printk(KERN_INFO "nfc: " fmt "\n", ##args )
 
+/* biggest size needed I can think off */
+#define NFC_BUF_SIZE  ( 4096 + 1024 )
+
 
 static uint log            = 0;
 module_param(log,            uint, 0400);
@@ -68,13 +71,30 @@ struct nfcs_info{
 	struct nand_chip chip;
 	int cmd_state;
 
-	uint count; /* internal counter */
-	uint num;   /* number of bytes which must be processed */
-
 	u_char ids[4];
 
-	uint page_size;
+	struct {
+		unsigned command;
+		u_char status;
+		uint row;
+		uint column;
+		uint count; /* internal counter */
+		uint num;   /* number of bytes which must be processed */
+		uint off;
+	} regs;
 
+
+	struct {
+		uint64_t totsz;
+		uint pgsz;
+		uint oobsz;
+		uint pgszoob;
+		uint pgnum;
+	} geom;
+
+	struct kmem_cache *slab;  /* Slab allocator for nand pages */
+	union nfc_mem *pages;
+	union nfc_mem buf;
 };
 
 struct nfcs_info nfc;
@@ -101,6 +121,28 @@ static int check_command(int cmd)
 	default:
 		return 1;
 	}
+}
+
+
+static union nfc_mem * nfc_get_page(uint pg_index)
+{
+	union nfc_mem *page = &(nfc.pages[pg_index]);
+
+	PKL("get page 0x%x", pg_index);
+	if(page->byte)
+		return page;
+
+	PKL("allocating memory for page 0x%x", pg_index);
+	page->byte = kmem_cache_alloc(nfc.slab, GFP_NOFS);
+	if (page->byte == NULL) {
+		PKL("prog_page: error allocating memory for page %d", pg_index);
+		return NULL;
+	}
+
+
+	memset(page->byte, 0xff, nfc.geom.pgszoob);
+
+	return page;
 }
 
 
@@ -132,15 +174,35 @@ static void nfc_cmdfunc(struct mtd_info *mtd, unsigned command,	int column, int 
 		return;
 	}
 
-	nfc.count = 0;
+	nfc.regs.count = 0;
+	nfc.regs.command = command;
+	nfc.regs.num = 0;
+	nfc.regs.off = 0;
+	nfc.regs.column = column;
+	nfc.regs.row = page_addr;
+
+	PKL("processing command 0x%x", command);
 
 	if(command == NAND_CMD_READID) {
 		nfc.cmd_state = STATE_CMD_READID;
 		/* 4 id bytes */
-		nfc.num = 4;
+		nfc.regs.num = 4;
+		/* copy id to the chip buffer */
+		memcpy(nfc.buf.byte, nfc.ids, nfc.regs.num);
 	}
 	else if (command == NAND_CMD_RESET){
-		nfc.num = 0;
+		PKL("Reset");
+	}
+	else if (command == NAND_CMD_READOOB) {
+		/* copy oob data from page to buf */
+		union nfc_mem * pg = nfc_get_page(nfc.regs.row);
+
+		nfc.cmd_state = STATE_CMD_READOOB;
+		nfc.regs.off = nfc.geom.pgsz;
+		nfc.regs.num = nfc.geom.pgszoob - nfc.regs.off - nfc.regs.column;
+
+		memcpy(nfc.buf.byte, pg->byte + nfc.regs.off, nfc.regs.num);
+
 	}
 	else {
 		PKL("cmdfunc: not implemented command %x", command);
@@ -161,23 +223,36 @@ static u16 nfc_read_word(struct mtd_info *mtd)
 static uint8_t nfc_read_byte(struct mtd_info *mtd)
 {
 	uint8_t outb = 0;
+	if (nfc.regs.count >= nfc.regs.num) {
+		PKL("read byte at index %d, out of range %d", nfc.regs.count, nfc.regs.num);
+		outb = 0xff;
+		return outb;
+	}
+
+	outb = nfc.buf.byte[nfc.regs.count];
+	nfc.regs.count ++;
+
 	if(nfc.cmd_state == STATE_CMD_READID){
-		if (nfc.count >= nfc.num) {
-			PKL("read ID byte %d, out of range, skip", nfc.count);
-			outb = 0;
-			return outb;
-		}
-		PKL("read ID byte %d, total %d", nfc.count, nfc.num);
-		outb = nfc.ids[nfc.count];
-		nfc.count++;
+		PKL("read ID byte %d, total %d", nfc.regs.count, nfc.regs.num);
+	}
+	else {
+		PKL("Not supported ");
 	}
 	return outb;
 }
 
 static void nfc_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 {
-	PKL("read buf not implemented");
-	dump_stack();
+	PKL("read buf");
+
+	if(nfc.regs.count + len >= nfc.regs.num) {
+		PKL("read out of the boundary");
+		return;
+	}
+
+	memcpy(buf, nfc.buf.byte + nfc.regs.count, len);
+	nfc.regs.count += len;
+
 	return;
 }
 
@@ -188,9 +263,11 @@ static void nfc_write_buf(struct mtd_info *mtd, const uint8_t *buf, int len)
 	return;
 }
 
+
 static int __init nfc_init_module(void)
 {
 	int retval = -ENOMEM;
+	int i;
 	struct nand_chip *chip = &nfc.chip;
 	struct mtd_info *mtd = &nfc.mtd;
 
@@ -205,12 +282,11 @@ static int __init nfc_init_module(void)
 	nfc.ids[2] = NFC_THIRD_ID_BYTE;
 	nfc.ids[3] = NFC_FOURTH_ID_BYTE;
 
-
 	mtd->priv = chip;
 	mtd->owner = THIS_MODULE;
 
 	chip->ecc.mode = NAND_ECC_HW;
-	/* What is the proper value */
+	/* What is the proper value? Need to be set? */
 	chip->ecc.size = 512;
 	chip->ecc.strength = 1;
 
@@ -223,8 +299,15 @@ static int __init nfc_init_module(void)
 	chip->read_byte = nfc_read_byte;
 	chip->read_buf = nfc_read_buf;
 	chip->write_buf = nfc_write_buf;
+	/* needed for nand scan  */
+	nfc.buf.byte = kmalloc(NFC_BUF_SIZE, GFP_KERNEL);
+	if (!nfc.buf.byte) {
+		PKL("unable to allocate chip buf\n");
+		retval = -ENOMEM;
+		goto exit;
+	}
 
-
+	/* scan nand identity, fill the meta data like page/oob size information */
 	retval = nand_scan_ident(mtd, 1, NULL);
 	if (retval) {
 		PKL("cannot scan NFC simulator device identity");
@@ -234,16 +317,39 @@ static int __init nfc_init_module(void)
 
 	}
 
+	nfc.geom.totsz = mtd->size;
+	nfc.geom.pgsz = mtd->writesize;
+	nfc.geom.oobsz = mtd->oobsize;
+	nfc.geom.pgszoob = nfc.geom.pgsz + nfc.geom.oobsz;
+	nfc.geom.pgnum = div_u64(nfc.geom.totsz, nfc.geom.pgsz);
+
+	nfc.pages = vmalloc(nfc.geom.pgnum * sizeof(union nfc_mem));
+	if (!nfc.pages) {
+		PKL("unable to allocate page array\n");
+		retval = -ENOMEM;
+		goto exit;
+	}
+	for (i = 0; i < nfc.geom.pgnum; i++) {
+		nfc.pages[i].byte = NULL;
+	}
+
+	nfc.slab = kmem_cache_create("nfcsim", nfc.geom.pgszoob, 0, 0, NULL);
+	if (!nfc.slab) {
+		PKL("unable to allocate page kmem_cache\n");
+		retval = -ENOMEM;
+		goto exit;
+	}
+
+
+
 	/*
 
-	not ready yet
 	retval = nand_scan_tail(mtd);
 	if (retval) {
 		PKL("cannot scan NFC simulator device tail");
 		if (retval > 0)
 			retval = -ENXIO;
 		goto exit;
-
 	}
 	*/
 exit:
@@ -254,6 +360,20 @@ module_init(nfc_init_module);
 
 static void __exit nfc_cleanup_module(void)
 {
+	int i;
+
+	if (nfc.pages) {
+		for (i = 0; i < nfc.geom.pgnum; i++) {
+			if (nfc.pages[i].byte)
+				kmem_cache_free(nfc.slab,
+						nfc.pages[i].byte);
+		}
+		kmem_cache_destroy(nfc.slab);
+		vfree(nfc.pages);
+	}
+	if (nfc.buf.byte) {
+		kfree(nfc.buf.byte);
+	}
 	PKL("module exit");
 }
 module_exit(nfc_cleanup_module);
