@@ -243,10 +243,10 @@ static uint8_t nfc_read_byte(struct mtd_info *mtd)
 
 static void nfc_read_buf(struct mtd_info *mtd, uint8_t *buf, int len)
 {
-	PKL("read buf");
+	PKL("read buf, len 0x%x", len);
 
-	if(nfc.regs.count + len >= nfc.regs.num) {
-		PKL("read out of the boundary");
+	if(nfc.regs.count + len > nfc.regs.num) {
+		PKL("read out of the boundary: %d, %d", nfc.regs.count, nfc.regs.num);
 		return;
 	}
 
@@ -342,8 +342,6 @@ static int __init nfc_init_module(void)
 
 
 
-	/*
-
 	retval = nand_scan_tail(mtd);
 	if (retval) {
 		PKL("cannot scan NFC simulator device tail");
@@ -351,7 +349,6 @@ static int __init nfc_init_module(void)
 			retval = -ENXIO;
 		goto exit;
 	}
-	*/
 exit:
 	return retval;
 }
