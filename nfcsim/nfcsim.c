@@ -132,7 +132,7 @@ static union nfc_mem * nfc_get_page(uint pg_index)
 	if(page->byte)
 		return page;
 
-	PKL("allocating memory for page 0x%x", pg_index);
+	/* PKL("allocating memory for page 0x%x", pg_index); */
 	page->byte = kmem_cache_alloc(nfc.slab, GFP_NOFS);
 	if (page->byte == NULL) {
 		PKL("prog_page: error allocating memory for page %d", pg_index);
@@ -274,28 +274,29 @@ static void nfc_cmdfunc(struct mtd_info *mtd, unsigned command,	int column, int 
 
 		PKL("CMD READOOB");
 
-		/* copy oob data from page to buf */
-		pg = nfc_get_page(nfc.regs.row);
-
 		nfc.regs.off = nfc.geom.pgsz;
 		nfc.regs.row = page_addr;
 		nfc.regs.num = nfc.geom.pgszoob - nfc.regs.off - nfc.regs.column;
 		nfc.regs.count = 0;
 		nfc.regs.column = 0;
 
+		/* copy oob data from page to buf */
+		pg = nfc_get_page(nfc.regs.row);
+
+
 		memcpy(nfc.buf.byte, pg->byte + nfc.regs.off, nfc.regs.num);
 	}
 	else if (command == NAND_CMD_READ0) {
 		union nfc_mem * pg;
-		PKL("CMD READ0");
-
-		pg = nfc_get_page(nfc.regs.row);
+		PKL("CMD READ0 col 0x%x row 0x%x", column, page_addr);
 
 		nfc.regs.off = 0;
 		nfc.regs.num = nfc.geom.pgszoob - nfc.regs.column - nfc.regs.off;
 		nfc.regs.row = page_addr;
 		nfc.regs.count = 0;
 		nfc.regs.column = column;
+
+		pg = nfc_get_page(nfc.regs.row);
 
 		memcpy(nfc.buf.byte, pg->byte + nfc.regs.off + nfc.regs.column, nfc.regs.num);
 	}
@@ -362,7 +363,13 @@ static void nfc_cmdfunc(struct mtd_info *mtd, unsigned command,	int column, int 
 		union nfc_mem *pg;
 
 		PKL("CMD PAGEPROG");
+		if (pre_command != NAND_CMD_SEQIN) {
+			PKL("expecting the previous command is SEQIN");
+			dump_stack();
+			return;
+		}
 
+		/* page to be programed is passed in in command SEQIN */
 		pg = nfc_get_page(nfc.regs.row);
 		memcpy(pg->byte + nfc.regs.column, nfc.buf.byte, nfc.regs.num);
 	}
@@ -472,7 +479,6 @@ static int __init nfc_init_module(void)
 		if (retval > 0)
 			retval = -ENXIO;
 		goto exit;
-
 	}
 
 	nfc.geom.totsz = mtd->size;
@@ -511,6 +517,8 @@ static int __init nfc_init_module(void)
 	}
 
 	PKL("bloc size is %d, pg num in block %d", nfc.geom.secsz, nfc.geom.pgsec);
+
+	retval = mtd_device_register(mtd, &(nfc.partition), 1);
 exit:
 	return retval;
 }
