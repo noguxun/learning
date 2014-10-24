@@ -373,6 +373,17 @@ static void nfc_cmdfunc(struct mtd_info *mtd, unsigned command,	int column, int 
 		pg = nfc_get_page(nfc.regs.row);
 		memcpy(pg->byte + nfc.regs.column, nfc.buf.byte, nfc.regs.num);
 	}
+	else if (command == NAND_CMD_STATUS) {
+		PKL("CMD STATUS");
+
+		nfc.regs.num = 1;
+		nfc.regs.row = 0;
+		nfc.regs.off = 0;
+		nfc.regs.count = 0;
+		nfc.regs.column = 0;
+
+		nfc.buf.byte[0] = nfc.regs.status;
+	}
 	else {
 		PKL("cmdfunc: not implemented command %x", command);
 		dump_stack();
@@ -391,6 +402,7 @@ static u16 nfc_read_word(struct mtd_info *mtd)
 static uint8_t nfc_read_byte(struct mtd_info *mtd)
 {
 	uint8_t outb = 0;
+
 	if (nfc.regs.count >= nfc.regs.num) {
 		PKL("read byte at index %d, out of range %d", nfc.regs.count, nfc.regs.num);
 		outb = 0xff;
@@ -400,12 +412,8 @@ static uint8_t nfc_read_byte(struct mtd_info *mtd)
 	outb = nfc.buf.byte[nfc.regs.count];
 	nfc.regs.count ++;
 
-	if(nfc.regs.command == NAND_CMD_READID){
-		PKL("read ID byte %d, total %d", nfc.regs.count, nfc.regs.num);
-	}
-	else {
-		PKL("Not supported ");
-	}
+	PKL("read byte, value 0x%x", outb);
+
 	return outb;
 }
 
@@ -443,6 +451,9 @@ static int __init nfc_init_module(void)
 	nfc.ids[1] = NFC_SECOND_ID_BYTE;
 	nfc.ids[2] = NFC_THIRD_ID_BYTE;
 	nfc.ids[3] = NFC_FOURTH_ID_BYTE;
+
+	/* simulator is always ready and writable */
+	nfc.regs.status = NAND_STATUS_WP | NAND_STATUS_READY;
 
 	mtd->priv = chip;
 	mtd->owner = THIS_MODULE;
@@ -528,6 +539,7 @@ module_init(nfc_init_module);
 static void __exit nfc_cleanup_module(void)
 {
 	int i;
+	struct mtd_info *mtd = &nfc.mtd;
 
 	if (nfc.pages) {
 		for (i = 0; i < nfc.geom.pgnum; i++) {
@@ -541,6 +553,7 @@ static void __exit nfc_cleanup_module(void)
 	if (nfc.buf.byte) {
 		kfree(nfc.buf.byte);
 	}
+	mtd_device_unregister(mtd);
 	PKL("module exit");
 }
 module_exit(nfc_cleanup_module);
