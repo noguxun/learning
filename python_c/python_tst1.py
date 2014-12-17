@@ -24,16 +24,17 @@ print(binary_string.decode('utf-8'))
 arry_size =  10
 data_arry = (c_int * arry_size)()
 lib.GetArrayData(arry_size, data_arry)
-#for index in range(arry_size):
-#    print(data_arry[index])
+for index in range(arry_size):
+    print(type(data_arry[index]))
+    print(data_arry[index])
 
-
+"""
 lib.GetBytes.restype = POINTER(c_ubyte)
 length = c_int();
 data_arry = lib.GetBytes(byref(length))
 for index in range(length.value):
     print(data_arry[index])
-
+"""
 
 
 
