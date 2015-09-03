@@ -1,4 +1,5 @@
 from ctypes import *
+import struct
 
 # Reference:
 #  http://docs.python.org/3.3/library/ctypes.html
@@ -28,13 +29,22 @@ for index in range(arry_size):
     print(type(data_arry[index]))
     print(data_arry[index])
 
-"""
 lib.GetBytes.restype = POINTER(c_ubyte)
 length = c_int();
 data_arry = lib.GetBytes(byref(length))
+print(type(data_arry))
+print(data_arry)
 for index in range(length.value):
     print(data_arry[index])
-"""
+    print(type(data_arry[index]))
+
+py_str = string_at(data_arry, length)
+print(py_str)
+print(type(py_str))
+
+uppacked_data = struct.unpack("2B8s", py_str)
+print(uppacked_data)
+print(type(uppacked_data))
 
 
 
